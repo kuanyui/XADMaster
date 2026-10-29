@@ -19,7 +19,8 @@ Its changes to XADMaster:
     no longer has. This change of `XADMaster.xcodeproj` is made in the workflow only.
     The package `unar-macos-universal.zip` has `unar`, `lsar`, LICENSE, this file, and
     `unar-src.zip`: the source code of XADMaster and UniversalDetector at the commits built.
-  - Windows (an experiment): built with the GNUstep of MSYS2 (CLANG64). Before the build, the
-    workflow fixes a header of GNUstep 1.31.1, as GNUstep did after that version
-    (https://github.com/gnustep/libs-base/pull/809). Nothing is packed yet.
+  - Windows (an experiment): built in MSYS2 (CLANG64), with GNUstep Base 1.31.1 that the workflow
+    builds without ICU, TLS, XML and XSLT, and with two later fixes of GNUstep: commit bace6f54 (its
+    configure test of constant strings) and https://github.com/gnustep/libs-base/pull/809 (no
+    `__block` on an instance variable). Nothing is packed yet.
 - This file.

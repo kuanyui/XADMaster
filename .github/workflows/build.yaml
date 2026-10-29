@@ -177,8 +177,8 @@ jobs:
           path: XADMaster/dist/unar-macos-universal.zip
           if-no-files-found: error
 
-  # An experiment: can `unar` and `lsar` be built for Windows with the GNUstep of MSYS2?
-  # Nothing is packed yet. The programs need many DLLs of MSYS2: GNUstep and the libraries that it uses.
+  # An experiment: can `unar` and `lsar` be built for Windows with GNUstep, in MSYS2?
+  # Nothing is packed yet. The programs need the DLLs of GNUstep Base (built here, slim) and some DLLs of MSYS2.
   build-windows:
     runs-on: windows-latest
     defaults:
@@ -197,8 +197,9 @@ jobs:
           ref: 4eb832d999628edcd3d134e46bd35357c8c99a85
           path: UniversalDetector
 
-      # CLANG64: clang and libc++, which the GNUstep of MSYS2 (gnustep-base, libobjc2) is built with.
-      # `gnustep-make` has `gnustep-config`, and `llvm-tools` has `ar`.
+      # CLANG64: clang and libc++, which the GNUstep of MSYS2 (gnustep-make, libobjc2) is built with.
+      # `gnustep-make` has `gnustep-config`, and `llvm-tools` has `ar`. GNUstep Base is built below, with
+      # libffi and libiconv; `pkgconf` helps its configure to find them.
       # A third-party action, so it is pinned to a commit: the tag `v2.33.0` could be moved to other code later, a commit cannot.
       - name: Setup MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
@@ -207,27 +208,50 @@ jobs:
           update: true
           install: >-
             make
+            curl
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-lld
             mingw-w64-clang-x86_64-llvm-tools
+            mingw-w64-clang-x86_64-pkgconf
             mingw-w64-clang-x86_64-gnustep-make
-            mingw-w64-clang-x86_64-gnustep-base
+            mingw-w64-clang-x86_64-libobjc2
+            mingw-w64-clang-x86_64-libffi
+            mingw-w64-clang-x86_64-libiconv
             mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-bzip2
             mingw-w64-clang-x86_64-wavpack
 
-      # GNUstep 1.31.1 puts `__block` (BLOCK_SCOPE) on an instance variable in NSBackgroundActivityScheduler.h.
-      # Newer versions of clang reject it in every file that imports Foundation. GNUstep removed it after
-      # 1.31.1 (https://github.com/gnustep/libs-base/pull/809), so do the same in the header of MSYS2.
-      - name: Fix a header of GNUstep 1.31.1
+      # The GNUstep Base of MSYS2 brings 18 more DLLs (49 MB) for features that unar does not use: ICU
+      # (3 DLLs, 38 MB), TLS (GnuTLS and the 12 DLLs that it needs), XML and XSLT. So GNUstep Base 1.31.1,
+      # the version of MSYS2, is built here without them. unar does not need ICU: on Windows,
+      # XADStringWindows.m converts Shift_JIS and the other encodings with MultiByteToWideChar() of Windows.
+      # Two later fixes of GNUstep are needed with the clang of MSYS2:
+      # - bace6f54 (2026-04-08), which MSYS2 applies too: its configure test of constant strings.
+      #   It changes only config.constant-string-class.m, so this file is taken from that commit.
+      # - #809 (2026-10-05): no `__block` (BLOCK_SCOPE) on an instance variable in
+      #   NSBackgroundActivityScheduler.h, which clang rejects in every file that imports Foundation.
+      # CC, CXX and OBJCFLAGS are from the build of MSYS2 (mingw-w64-gnustep-base/PKGBUILD).
+      - name: Build a slim GNUstep Base 1.31.1
+        working-directory: ${{ runner.temp }}
         run: |
-          header=/clang64/include/Foundation/NSBackgroundActivityScheduler.h
+          curl -fsSL -o gnustep-base.tar.gz \
+            https://github.com/gnustep/libs-base/releases/download/base-1_31_1/gnustep-base-1.31.1.tar.gz
+          echo "e7546f1c978a7c75b676953a360194a61e921cb45a4804497b4f346a460545cd  gnustep-base.tar.gz" | sha256sum -c
+          tar -xzf gnustep-base.tar.gz
+          cd gnustep-base-1.31.1
+          curl -fsSL -o config/config.constant-string-class.m \
+            https://raw.githubusercontent.com/gnustep/libs-base/bace6f54fd5fb882cb3adc79c87cc82d5c6d9c70/config/config.constant-string-class.m
+          echo "dbd1e3c0ba830b139117a19e94292add21dd76a109301f48049f5ebd52694cfe  config/config.constant-string-class.m" | sha256sum -c
+          header=Headers/Foundation/NSBackgroundActivityScheduler.h
           sed -i 's/BLOCK_SCOPE GSScheduledBlock _block;/GSScheduledBlock _block;/' "$header"
-          grep -n -F 'GSScheduledBlock _block;' "$header"
           if grep -q -F 'BLOCK_SCOPE GSScheduledBlock _block;' "$header"; then
             echo "::error::$header still has BLOCK_SCOPE on the instance variable _block."
             exit 1
           fi
+          export CC=clang CXX=clang++ OBJCFLAGS=-Wno-incompatible-pointer-types
+          ./configure --prefix="$MINGW_PREFIX" --disable-icu --disable-tls --disable-xml --disable-xslt
+          make -j"$(nproc)"
+          make install
 
       # The Makefile.windows files of both repositories are from 2012: they call gcc, expect GNUstep in
       # C:\GNUstep, and XADMaster's links to the old 32-bit zlib and bzip2 in Windows/lib. So these variables
@@ -331,7 +355,7 @@ jobs:
           ls -l unar.exe lsar.exe
           dlls="$(ldd unar.exe lsar.exe | awk '$3 ~ /^\/clang64\// { print $3 }' | sort -u)"
           while IFS= read -r dll; do
-            package="$(pacman -Qoq "$dll" 2> /dev/null || echo '?')"
+            package="$(pacman -Qoq "$dll" 2> /dev/null || echo '(built here)')"
             license="$(pacman -Qi "$package" 2> /dev/null | sed -n 's/^Licenses *: //p')"
             printf '%7d KB  %-36s %-44s %s\n' "$(( $(stat -c %s "$dll") / 1024 ))" "${dll##*/}" "$package" "$license"
           done <<< "$dlls"

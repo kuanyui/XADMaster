@@ -24,6 +24,10 @@
 #import "CSFileHandle.h"
 #import "Progress.h"
 
+#if defined(__MINGW32__) && !defined(__COCOTRON__)
+#include <wchar.h> // _wunlink()
+#endif
+
 @implementation XADUnarchiver
 
 +(XADUnarchiver *)unarchiverForArchiveParser:(XADArchiveParser *)archiveparser
@@ -453,7 +457,11 @@ resourceForkDictionary:(NSDictionary *)forkdict wantChecksum:(BOOL)checksum erro
 		@try { fh=[CSFileHandle fileHandleForWritingAtPath:destpath]; }
 		@catch(id e)
 		{
+			#if defined(__MINGW32__) && !defined(__COCOTRON__) // GNUstep under mingw32: the path is UTF-16, as in CSFileHandle.m
+			_wunlink((const wchar_t *)[destpath fileSystemRepresentation]);
+			#else
 			unlink([destpath fileSystemRepresentation]);
+			#endif
 			@try { fh=[CSFileHandle fileHandleForWritingAtPath:destpath]; }
 			@catch(id e) { return XADOpenFileError; }
 		}

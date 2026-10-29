@@ -1,0 +1,303 @@
+name: Build unar
+
+on:
+  push:
+    branches: [ master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    # Not `macos-latest`: GitHub moves that label to newer versions of macOS and Xcode.
+    # A newer Xcode may build `unar` differently, or reject MACOSX_DEPLOYMENT_TARGET below.
+    runs-on: macos-26
+    defaults:
+      run:
+        # `shell: bash` adds `-o pipefail`: when a command in a pipe fails, the step fails too.
+        shell: bash
+        working-directory: XADMaster
+    env:
+      # The oldest macOS that `unar` and `lsar` run on. Without it, they would run only on the macOS
+      # of the runner, or newer.
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      # Our lha (https://github.com/kuanyui/lha), only to make the LZH archive for a test below.
+      LHA_VERSION: 1.14i-ac20260723-ky20261029
+    steps:
+      # The Xcode project of XADMaster expects UniversalDetector next to it, in `../UniversalDetector`.
+      - uses: actions/checkout@v7
+        with:
+          path: XADMaster
+
+      # UniversalDetector is archived (read-only) since 2022, so this commit is its last one.
+      - uses: actions/checkout@v7
+        with:
+          repository: MacPaw/universal-detector
+          ref: 4eb832d999628edcd3d134e46bd35357c8c99a85
+          path: UniversalDetector
+
+      # This builds universal binaries: `unar` and `lsar` have the code for Apple silicon (arm64)
+      # and the code for Intel (x86_64).
+      # - `lsar` links to libstdc++.6.dylib, which the macOS SDK no longer has (since Xcode 10).
+      #   So link it to libc++ instead, as Homebrew's formula of unar does. The change is made here
+      #   only, so the files of this repository stay the same as upstream.
+      # - `xcodebuild -target unar` also builds what `unar` needs: libXADMaster.a and libUniversalDetector.a.
+      - name: Compile unar and lsar
+        run: |
+          sed -i '' 's/libstdc++\.6\.dylib/libc++.1.dylib/g' XADMaster.xcodeproj/project.pbxproj
+          for target in unar lsar; do
+            xcodebuild -project XADMaster.xcodeproj -target "$target" -configuration Release \
+              SYMROOT="$PWD/build" \
+              ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+              MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+          done
+          ./build/Release/unar -version
+          ./build/Release/lsar -version
+
+      # There is no Mac to try `unar` and `lsar` on before the release.
+      # So this step and the 3 steps after it check them here.
+      # The runner has an Apple silicon CPU, so these 4 steps run only the arm64 code.
+      # The x86_64 code is inspected, but not run.
+      - name: Check the CPUs and the oldest macOS
+        run: |
+          for program in unar lsar; do
+            lipo -info "build/Release/$program"
+            lipo "build/Release/$program" -verify_arch arm64 x86_64
+            for arch in arm64 x86_64; do
+              minos="$(vtool -arch "$arch" -show-build "build/Release/$program" | awk '$1 == "minos" { print $2 }')"
+              echo "$program ($arch): minos $minos"
+              if [ "$minos" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+                echo "::error::The minimum macOS version of the $arch code of $program is $minos, not $MACOSX_DEPLOYMENT_TARGET."
+                exit 1
+              fi
+            done
+          done
+
+      # A library from Homebrew on the runner would be missing on other Macs.
+      # So the code for each CPU must link only to libraries of macOS, in /usr/lib/ or /System/Library/.
+      - name: Check the libraries that unar and lsar need
+        run: |
+          for program in unar lsar; do
+            for arch in arm64 x86_64; do
+              output="$(otool -arch "$arch" -L "build/Release/$program")"
+              echo "$output"
+              # The lines of libraries start with a tab. The first line names the file.
+              others="$(grep -E '^[[:space:]]' <<< "$output" | awk '{ print $1 }' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)"
+              if [ -n "$others" ]; then
+                echo "::error::The $arch code of $program links to libraries outside macOS: $others"
+                exit 1
+              fi
+            done
+          done
+
+      # The same check as the test of Homebrew's formula: list and extract a gzip file.
+      - name: Check a gzip file
+        working-directory: ${{ runner.temp }}
+        run: |
+          bin="$GITHUB_WORKSPACE/XADMaster/build/Release"
+          mkdir gzip-test
+          cd gzip-test
+          echo hello > hello.txt
+          gzip hello.txt
+          listing="$("$bin/lsar" hello.txt.gz)"
+          echo "$listing"
+          if [ "$listing" != $'hello.txt.gz: Gzip\nhello.txt' ]; then
+            echo "::error::lsar does not list hello.txt in hello.txt.gz."
+            exit 1
+          fi
+          "$bin/unar" hello.txt.gz
+          if [ "$(cat hello.txt)" != hello ]; then
+            echo "::error::unar does not extract hello.txt from hello.txt.gz."
+            exit 1
+          fi
+
+      # Make an LZH archive with a Shift_JIS file name that has が, with our lha.
+      # Then check that `unar -encoding Shift_JIS` extracts the file with this name and its content,
+      # and that the name has が as one character.
+      - name: Check a Shift_JIS file name with が in an LZH archive
+        working-directory: ${{ runner.temp }}
+        run: |
+          bin="$GITHUB_WORKSPACE/XADMaster/build/Release"
+          url="https://github.com/kuanyui/lha/releases/download/${LHA_VERSION}/lha-${LHA_VERSION}-macos-universal.zip"
+          if ! curl -fsSL -o lha.zip "$url"; then
+            echo "::error::Cannot download lha ${LHA_VERSION}. Is it on https://github.com/kuanyui/lha/releases ?"
+            exit 1
+          fi
+          unzip -q lha.zip -d lha
+          mkdir lzh-test
+          cd lzh-test
+          name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
+          echo hello > "$name"
+          ../lha/lha c --archive-kanji-code=sjis --system-kanji-code=utf8 test.lzh "$name"
+          "$bin/unar" -no-directory -output-directory out -encoding Shift_JIS test.lzh
+          ls -l out
+          if [ "$(cat "out/$name")" != hello ]; then
+            echo "::error::unar does not extract が.txt from test.lzh."
+            exit 1
+          fi
+          # macOS finds a file by either form of が: one character, or か and a combining ゛. So `cat`
+          # above works with both. `ls` prints the name as it is written, so it tells which form unar wrote.
+          if [ "$(ls out)" != "$name" ]; then
+            echo "::error::unar does not write が as one character in the name of が.txt. The bytes of the name: $(ls out | od -An -tx1)"
+            exit 1
+          fi
+
+      # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) wants the programs to
+      # come with the license and with the source code that they are built from. So the package has
+      # `unar`, `lsar`, LICENSE, and unar-src.zip: the source code of both repositories at the commits
+      # built here (`git archive`, so without the files that the build generated), side by side as
+      # the build needs them.
+      - name: Pack unar and lsar with their source code
+        run: |
+          name=unar-macos-universal
+          mkdir -p "dist/$name" "$RUNNER_TEMP/src"
+          cp build/Release/unar build/Release/lsar LICENSE "dist/$name/"
+          git archive --prefix=unar-src/XADMaster/ HEAD | tar -x -C "$RUNNER_TEMP/src"
+          git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ HEAD | tar -x -C "$RUNNER_TEMP/src"
+          (cd "$RUNNER_TEMP/src" && zip -r -X -q "$GITHUB_WORKSPACE/XADMaster/dist/$name/unar-src.zip" unar-src)
+          (cd "dist/$name" && zip -X "../$name.zip" unar lsar LICENSE unar-src.zip)
+          zipinfo "dist/$name.zip"
+          # Unzip the ZIP, and run the unzipped `unar` and `lsar`.
+          # This checks that the ZIP keeps their executable bit.
+          unzip -q "dist/$name.zip" -d "$RUNNER_TEMP/unzipped"
+          "$RUNNER_TEMP/unzipped/unar" -version
+          "$RUNNER_TEMP/unzipped/lsar" -version
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: unar-macos-universal
+          path: XADMaster/dist/unar-macos-universal.zip
+          if-no-files-found: error
+
+  # An experiment: can `unar` and `lsar` be built for Windows with the GNUstep of MSYS2?
+  # Nothing is packed yet. The programs need many DLLs of MSYS2: GNUstep and the libraries that it uses.
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+        working-directory: XADMaster
+    steps:
+      # The same 2 repositories as in `build-macos`.
+      - uses: actions/checkout@v7
+        with:
+          path: XADMaster
+
+      - uses: actions/checkout@v7
+        with:
+          repository: MacPaw/universal-detector
+          ref: 4eb832d999628edcd3d134e46bd35357c8c99a85
+          path: UniversalDetector
+
+      # CLANG64: clang and libc++, which the GNUstep of MSYS2 (gnustep-base, libobjc2) is built with.
+      # `gnustep-make` has `gnustep-config`, and `llvm-tools` has `ar`.
+      # A third-party action, so it is pinned to a commit: the tag `v2.33.0` could be moved to other code later, a commit cannot.
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            make
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-lld
+            mingw-w64-clang-x86_64-llvm-tools
+            mingw-w64-clang-x86_64-gnustep-make
+            mingw-w64-clang-x86_64-gnustep-base
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-bzip2
+            mingw-w64-clang-x86_64-wavpack
+
+      # The Makefile.windows files of both repositories are from 2012: they call gcc, expect GNUstep in
+      # C:\GNUstep, and XADMaster's links to the old 32-bit zlib and bzip2 in Windows/lib. So these variables
+      # are replaced on the command line. The files of both repositories stay the same as upstream.
+      # - `-iquote Windows/include`: only for `#import "regex.h"` in XADRegex.h. So its old zlib.h and
+      #   bzlib.h, which `#include <...>` would find, are not used.
+      # - LIBS: `gnustep-config --base-libs` gives the libraries of GNUstep. zlib, bzip2 and wavpack are for
+      #   the archive formats, winmm and gdi32 of Windows are from Makefile.windows.
+      # - UniversalDetector first, and only its library: without it, the make of XADMaster would make
+      #   UniversalDetector's test program too.
+      # - `-k`, and the second make runs even if the first fails: one run shows as many errors as possible.
+      - name: Compile unar and lsar
+        run: |
+          overrides=(
+            OBJCC=clang CC=clang CXX=clang++ LD=clang++
+            GNUSTEP_OPTS="$(gnustep-config --objc-flags)"
+            GCC_OPTS="-O2 -Wno-import -Wno-multichar -g -D_FILE_OFFSET_BITS=64 -iquote Windows/include"
+            ALL_LDFLAGS="-Wl,--whole-archive -fexceptions"
+            LIBS="-Wl,--no-whole-archive $(gnustep-config --base-libs) -lz -lbz2 -lwavpack -lwinmm -lgdi32"
+          )
+          failed=
+          make -C ../UniversalDetector -f Makefile.windows -k -j"$(nproc)" --output-sync=target "${overrides[@]}" \
+            libUniversalDetector.a || failed=1
+          make -f Makefile.windows -k -j"$(nproc)" --output-sync=target "${overrides[@]}" \
+            unar lsar || failed=1
+          if [ -n "$failed" ]; then
+            echo "::error::make failed. See the errors above."
+            exit 1
+          fi
+          # clang may name the programs `unar` and `lsar`, without `.exe`.
+          for program in unar lsar; do
+            if [ ! -f "$program.exe" ]; then mv "$program" "$program.exe"; fi
+          done
+          ./unar.exe -version
+          ./lsar.exe -version
+
+      # The same check as in `build-macos`. The DLLs of MSYS2 are found through PATH.
+      # On Windows, lsar.exe may print a line end as `\r\n`, so `tr` removes the `\r`.
+      - name: Check a gzip file
+        working-directory: ${{ runner.temp }}
+        run: |
+          bin="$(cygpath -u "$GITHUB_WORKSPACE")/XADMaster"
+          mkdir gzip-test
+          cd gzip-test
+          echo hello > hello.txt
+          gzip hello.txt
+          listing="$("$bin/lsar.exe" hello.txt.gz | tr -d '\r')"
+          echo "$listing"
+          if [ "$listing" != $'hello.txt.gz: Gzip\nhello.txt' ]; then
+            echo "::error::lsar does not list hello.txt in hello.txt.gz."
+            exit 1
+          fi
+          "$bin/unar.exe" hello.txt.gz
+          if [ "$(cat hello.txt)" != hello ]; then
+            echo "::error::unar does not extract hello.txt from hello.txt.gz."
+            exit 1
+          fi
+
+      # The same check as in `build-macos`: an LZH archive with a Shift_JIS file name that has が.
+      # lha.exe cannot make it here: it gets the file names of its command line in the ANSI code page of
+      # Windows (CP1252 on the runner), which has no が. So the bytes of the archive are written here,
+      # with a level-0 header (see `get_header_level0()` in src/header.c of LHa for UNIX).
+      # This archive was checked with lhasa (`lha t`) and lsar (`lsar -t -e Shift_JIS`).
+      - name: Check a Shift_JIS file name with が in an LZH archive
+        working-directory: ${{ runner.temp }}
+        run: |
+          bin="$(cygpath -u "$GITHUB_WORKSPACE")/XADMaster"
+          mkdir lzh-test
+          cd lzh-test
+          archive=''
+          archive+='\x1c\x55'                      # header size 28, sum of the header bytes
+          archive+='\x2d\x6c\x68\x30\x2d'          # method `-lh0-`: stored, not compressed
+          archive+='\x06\x00\x00\x00'              # compressed size: 6
+          archive+='\x06\x00\x00\x00'              # original size: 6
+          archive+='\x00\x00\x21\x5c'              # MS-DOS time and date: 2026-01-01 00:00
+          archive+='\x20\x00'                      # attribute "archive", header level 0
+          archive+='\x06\x82\xaa\x2e\x74\x78\x74'  # file name: 6 bytes, が.txt in Shift_JIS (が is 0x82 0xAA)
+          archive+='\x34\x5a'                      # CRC-16 of the content
+          archive+='\x68\x65\x6c\x6c\x6f\x0a'      # content: "hello" and a line end
+          archive+='\x00'                          # end of the archive
+          printf '%b' "$archive" > test.lzh
+          "$bin/unar.exe" -no-directory -output-directory out -encoding Shift_JIS test.lzh
+          name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
+          ls out
+          # Windows keeps a file name as it is given, so the name must be exactly this one.
+          if [ "$(ls out)" != "$name" ]; then
+            echo "::error::unar does not extract the file of test.lzh as が.txt, with が as one character."
+            exit 1
+          fi
+          if [ "$(cat "out/$name")" != hello ]; then
+            echo "::error::unar does not extract the content of が.txt from test.lzh."
+            exit 1
+          fi

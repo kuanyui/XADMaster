@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
  * MA 02110-1301  USA
  */
+// Changed in https://github.com/kuanyui/XADMaster, a fork of XADMaster, on 2026-10-29: see FORK_MODIFICATIONS.md.
 #import "XADUnarchiver.h"
 #import "XADPlatform.h"
 #import "XADAppleDouble.h"

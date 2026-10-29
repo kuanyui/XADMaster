@@ -143,19 +143,19 @@ jobs:
           fi
 
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) wants the programs to
-      # come with the license and with the source code that they are built from. So the package has
-      # `unar`, `lsar`, LICENSE, and unar-src.zip: the source code of both repositories at the commits
-      # built here (`git archive`, so without the files that the build generated), side by side as
-      # the build needs them.
+      # come with the license, with notices of the changes, and with the source code that they are
+      # built from. So the package has `unar`, `lsar`, LICENSE, FORK_MODIFICATIONS.md, and
+      # unar-src.zip: the source code of both repositories at the commits built here (`git archive`,
+      # so without the files that the build generated), side by side as the build needs them.
       - name: Pack unar and lsar with their source code
         run: |
           name=unar-macos-universal
           mkdir -p "dist/$name" "$RUNNER_TEMP/src"
-          cp build/Release/unar build/Release/lsar LICENSE "dist/$name/"
+          cp build/Release/unar build/Release/lsar LICENSE FORK_MODIFICATIONS.md "dist/$name/"
           git archive --prefix=unar-src/XADMaster/ HEAD | tar -x -C "$RUNNER_TEMP/src"
           git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ HEAD | tar -x -C "$RUNNER_TEMP/src"
           (cd "$RUNNER_TEMP/src" && zip -r -X -q "$GITHUB_WORKSPACE/XADMaster/dist/$name/unar-src.zip" unar-src)
-          (cd "dist/$name" && zip -X "../$name.zip" unar lsar LICENSE unar-src.zip)
+          (cd "dist/$name" && zip -X "../$name.zip" unar lsar LICENSE FORK_MODIFICATIONS.md unar-src.zip)
           zipinfo "dist/$name.zip"
           # Unzip the ZIP, and run the unzipped `unar` and `lsar`.
           # This checks that the ZIP keeps their executable bit.
@@ -208,6 +208,19 @@ jobs:
             mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-bzip2
             mingw-w64-clang-x86_64-wavpack
+
+      # GNUstep 1.31.1 puts `__block` (BLOCK_SCOPE) on an instance variable in NSBackgroundActivityScheduler.h.
+      # Newer versions of clang reject it in every file that imports Foundation. GNUstep removed it after
+      # 1.31.1 (https://github.com/gnustep/libs-base/pull/809), so do the same in the header of MSYS2.
+      - name: Fix a header of GNUstep 1.31.1
+        run: |
+          header=/clang64/include/Foundation/NSBackgroundActivityScheduler.h
+          sed -i 's/BLOCK_SCOPE GSScheduledBlock _block;/GSScheduledBlock _block;/' "$header"
+          grep -n -F 'GSScheduledBlock _block;' "$header"
+          if grep -q -F 'BLOCK_SCOPE GSScheduledBlock _block;' "$header"; then
+            echo "::error::$header still has BLOCK_SCOPE on the instance variable _block."
+            exit 1
+          fi
 
       # The Makefile.windows files of both repositories are from 2012: they call gcc, expect GNUstep in
       # C:\GNUstep, and XADMaster's links to the old 32-bit zlib and bzip2 in Windows/lib. So these variables

@@ -228,7 +228,8 @@ jobs:
       # - `-iquote Windows/include`: only for `#import "regex.h"` in XADRegex.h. So its old zlib.h and
       #   bzlib.h, which `#include <...>` would find, are not used.
       # - LIBS: `gnustep-config --base-libs` gives the libraries of GNUstep. zlib, bzip2 and wavpack are for
-      #   the archive formats, winmm and gdi32 of Windows are from Makefile.windows.
+      #   the archive formats, winmm and gdi32 of Windows are from Makefile.windows. pthread is for
+      #   `pthread_once()` in XADStuffItXEnglishHandle.m: on Windows, it is in winpthreads, not in the C library.
       # - UniversalDetector first, and only its library: without it, the make of XADMaster would make
       #   UniversalDetector's test program too.
       # - `-k`, and the second make runs even if the first fails: one run shows as many errors as possible.
@@ -239,7 +240,7 @@ jobs:
             GNUSTEP_OPTS="$(gnustep-config --objc-flags)"
             GCC_OPTS="-O2 -Wno-import -Wno-multichar -g -D_FILE_OFFSET_BITS=64 -iquote Windows/include"
             ALL_LDFLAGS="-Wl,--whole-archive -fexceptions"
-            LIBS="-Wl,--no-whole-archive $(gnustep-config --base-libs) -lz -lbz2 -lwavpack -lwinmm -lgdi32"
+            LIBS="-Wl,--no-whole-archive $(gnustep-config --base-libs) -lz -lbz2 -lwavpack -lpthread -lwinmm -lgdi32"
           )
           failed=
           make -C ../UniversalDetector -f Makefile.windows -k -j"$(nproc)" --output-sync=target "${overrides[@]}" \

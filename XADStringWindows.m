@@ -327,9 +327,11 @@ static NSDictionary *WindowsCodePageForEncodingNameDictionary()
 	//[NSNumber numberWithInt:50936],@"", // EBCDIC Simplified Chinese
 	//[NSNumber numberWithInt:50937],@"", // EBCDIC US-Canada and Traditional Chinese
 	//[NSNumber numberWithInt:50939],@"", // EBCDIC Japanese (Latin) Extended and Japanese
-	[NSNumber numberWithInt:51932],@"euc-jp", // EUC Japanese
-	[NSNumber numberWithInt:51932],@"euc_jp", // EUC Japanese
-	[NSNumber numberWithInt:51932],@"eucjp", // EUC Japanese
+	// MultiByteToWideChar() cannot convert from 51932 (EUC Japanese), so EUC-JP uses 20932,
+	// the EUC-JP code page that Windows can convert from.
+	[NSNumber numberWithInt:20932],@"euc-jp", // Japanese (JIS 0208-1990 and 0121-1990)
+	[NSNumber numberWithInt:20932],@"euc_jp", // Japanese (JIS 0208-1990 and 0121-1990)
+	[NSNumber numberWithInt:20932],@"eucjp", // Japanese (JIS 0208-1990 and 0121-1990)
 	[NSNumber numberWithInt:51936],@"euc-cn", // EUC Simplified Chinese; Chinese Simplified (EUC)
 	[NSNumber numberWithInt:51936],@"euc_cn", // EUC Simplified Chinese; Chinese Simplified (EUC)
 	[NSNumber numberWithInt:51936],@"euccn", // EUC Simplified Chinese; Chinese Simplified (EUC)

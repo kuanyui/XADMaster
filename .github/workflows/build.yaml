@@ -311,39 +311,52 @@ jobs:
             exit 1
           fi
 
-      # The same check as in `build-macos`: an LZH archive with a Shift_JIS file name that has が.
-      # lha.exe cannot make it here: it gets the file names of its command line in the ANSI code page of
-      # Windows (CP1252 on the runner), which has no が. So the bytes of the archive are written here,
-      # with a level-0 header (see `get_header_level0()` in src/header.c of LHa for UNIX).
-      # This archive was checked with lhasa (`lha t`) and lsar (`lsar -t -e Shift_JIS`).
-      - name: Check a Shift_JIS file name with が in an LZH archive
+      # LZH archives with a file name that has が, in the encodings of Japanese LZH archives: Shift_JIS
+      # (most of them), EUC-JP and UTF-8 (rare). The Shift_JIS one is the same check as in `build-macos`.
+      # lha.exe cannot make them here: it gets the file names of its command line in the ANSI code page of
+      # Windows (CP1252 on the runner), which has no が. So the bytes of each archive are written here,
+      # with a level-0 header (see `get_header_level0()` in src/header.c of LHa for UNIX). The 3 archives
+      # differ only in the file name, and so in the header size and the sum of the header bytes.
+      # They were checked with lhasa (`lha t`) and lsar (`lsar -e ENCODING`).
+      # All 3 are checked even if one fails.
+      - name: Check が.txt in LZH archives, in Shift_JIS, EUC-JP and UTF-8
         working-directory: ${{ runner.temp }}
         run: |
           bin="$(cygpath -u "$GITHUB_WORKSPACE")/XADMaster"
+          name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
           mkdir lzh-test
           cd lzh-test
-          archive=''
-          archive+='\x1c\x55'                      # header size 28, sum of the header bytes
-          archive+='\x2d\x6c\x68\x30\x2d'          # method `-lh0-`: stored, not compressed
-          archive+='\x06\x00\x00\x00'              # compressed size: 6
-          archive+='\x06\x00\x00\x00'              # original size: 6
-          archive+='\x00\x00\x21\x5c'              # MS-DOS time and date: 2026-01-01 00:00
-          archive+='\x20\x00'                      # attribute "archive", header level 0
-          archive+='\x06\x82\xaa\x2e\x74\x78\x74'  # file name: 6 bytes, が.txt in Shift_JIS (が is 0x82 0xAA)
-          archive+='\x34\x5a'                      # CRC-16 of the content
-          archive+='\x68\x65\x6c\x6c\x6f\x0a'      # content: "hello" and a line end
-          archive+='\x00'                          # end of the archive
-          printf '%b' "$archive" > test.lzh
-          "$bin/unar.exe" -no-directory -output-directory out -encoding Shift_JIS test.lzh
-          name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
-          ls out
-          # Windows keeps a file name as it is given, so the name must be exactly this one.
-          if [ "$(ls out)" != "$name" ]; then
-            echo "::error::unar does not extract the file of test.lzh as が.txt, with が as one character."
-            exit 1
-          fi
-          if [ "$(cat "out/$name")" != hello ]; then
-            echo "::error::unar does not extract the content of が.txt from test.lzh."
+          failed=
+          #   encoding   header size, sum   file name: length, bytes (が is 82 AA in Shift_JIS, A4 AC in EUC-JP)
+          for test in 'Shift_JIS  \x1c\x55  \x06\x82\xaa\x2e\x74\x78\x74' \
+                      'EUC-JP     \x1c\x79  \x06\xa4\xac\x2e\x74\x78\x74' \
+                      'UTF-8      \x1d\x1a  \x07\xe3\x81\x8c\x2e\x74\x78\x74'; do
+            read -r encoding size_and_sum file_name <<< "$test"
+            archive="$size_and_sum"
+            archive+='\x2d\x6c\x68\x30\x2d'      # method `-lh0-`: stored, not compressed
+            archive+='\x06\x00\x00\x00'          # compressed size: 6
+            archive+='\x06\x00\x00\x00'          # original size: 6
+            archive+='\x00\x00\x21\x5c'          # MS-DOS time and date: 2026-01-01 00:00
+            archive+='\x20\x00'                  # attribute "archive", header level 0
+            archive+="$file_name"
+            archive+='\x34\x5a'                  # CRC-16 of the content
+            archive+='\x68\x65\x6c\x6c\x6f\x0a'  # content: "hello" and a line end
+            archive+='\x00'                      # end of the archive
+            printf '%b' "$archive" > "$encoding.lzh"
+            if ! "$bin/unar.exe" -no-directory -output-directory "out-$encoding" -encoding "$encoding" "$encoding.lzh"; then
+              echo "::error::unar fails on $encoding.lzh."
+              failed=1
+              continue
+            fi
+            written="$(ls "out-$encoding" || true)"
+            echo "$encoding: $written"
+            # Windows keeps a file name as it is given, so the name must be exactly が.txt, with が as one character.
+            if [ "$written" != "$name" ] || [ "$(cat "out-$encoding/$name")" != hello ]; then
+              echo "::error::unar does not extract $encoding.lzh as が.txt with its content. The bytes of the name: $(printf '%s' "$written" | od -An -tx1)"
+              failed=1
+            fi
+          done
+          if [ -n "$failed" ]; then
             exit 1
           fi
 

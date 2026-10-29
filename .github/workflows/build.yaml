@@ -199,7 +199,8 @@ jobs:
 
       # CLANG64: clang and libc++, which the GNUstep of MSYS2 (gnustep-make, libobjc2) is built with.
       # `gnustep-make` has `gnustep-config`, and `llvm-tools` has `ar`. GNUstep Base is built below, with
-      # libffi and libiconv; `pkgconf` helps its configure to find them.
+      # libffi and libiconv; `pkgconf` helps its configure to find them. Its configure also requires the
+      # library of curl (`mingw-w64-clang-x86_64-curl`, see below), as in the build of MSYS2.
       # A third-party action, so it is pinned to a commit: the tag `v2.33.0` could be moved to other code later, a commit cannot.
       - name: Setup MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
@@ -217,6 +218,7 @@ jobs:
             mingw-w64-clang-x86_64-libobjc2
             mingw-w64-clang-x86_64-libffi
             mingw-w64-clang-x86_64-libiconv
+            mingw-w64-clang-x86_64-curl
             mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-bzip2
             mingw-w64-clang-x86_64-wavpack
@@ -231,6 +233,9 @@ jobs:
       # - #809 (2026-10-05): no `__block` (BLOCK_SCOPE) on an instance variable in
       #   NSBackgroundActivityScheduler.h, which clang rejects in every file that imports Foundation.
       # CC, CXX and OBJCFLAGS are from the build of MSYS2 (mingw-w64-gnustep-base/PKGBUILD).
+      # configure requires libcurl with the Objective-C 2.0 runtime (libobjc2), but only NSURLSession uses
+      # it, which also needs libdispatch and is disabled here. A DLL imports only the functions that it
+      # uses, so the DLL of GNUstep Base does not need the DLL of curl, as in the build of MSYS2.
       - name: Build a slim GNUstep Base 1.31.1
         working-directory: ${{ runner.temp }}
         run: |
@@ -249,7 +254,7 @@ jobs:
             exit 1
           fi
           export CC=clang CXX=clang++ OBJCFLAGS=-Wno-incompatible-pointer-types
-          ./configure --prefix="$MINGW_PREFIX" --disable-icu --disable-tls --disable-xml --disable-xslt
+          ./configure --prefix="$MINGW_PREFIX" --disable-icu --disable-tls --disable-xml --disable-xslt --disable-nsurlsession
           make -j"$(nproc)"
           make install
 

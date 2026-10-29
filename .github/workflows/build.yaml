@@ -198,9 +198,10 @@ jobs:
           path: UniversalDetector
 
       # CLANG64: clang and libc++, which the GNUstep of MSYS2 (gnustep-make, libobjc2) is built with.
-      # `gnustep-make` has `gnustep-config`, and `llvm-tools` has `ar`. GNUstep Base is built below, with
-      # libffi and libiconv; `pkgconf` helps its configure to find them. Its configure also requires the
-      # library of curl (`mingw-w64-clang-x86_64-curl`, see below), as in the build of MSYS2.
+      # `gnustep-make` has `gnustep-config`, `llvm-tools` has `ar`, and `ntldd` lists the DLLs that the
+      # programs need, in the last step. GNUstep Base is built below, with libffi and libiconv; `pkgconf`
+      # helps its configure to find them. Its configure also requires the library of curl
+      # (`mingw-w64-clang-x86_64-curl`, see below), as in the build of MSYS2.
       # A third-party action, so it is pinned to a commit: the tag `v2.33.0` could be moved to other code later, a commit cannot.
       - name: Setup MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
@@ -222,6 +223,7 @@ jobs:
             mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-bzip2
             mingw-w64-clang-x86_64-wavpack
+            mingw-w64-clang-x86_64-ntldd
 
       # The GNUstep Base of MSYS2 brings 18 more DLLs (49 MB) for features that unar does not use: ICU
       # (3 DLLs, 38 MB), TLS (GnuTLS and the 12 DLLs that it needs), XML and XSLT. So GNUstep Base 1.31.1,
@@ -366,12 +368,19 @@ jobs:
           fi
 
       # To decide whether to pack them: the DLLs that unar.exe and lsar.exe load, and the DLLs that those
-      # DLLs load (`ldd`), except the DLLs of Windows. For each DLL: its size, the MSYS2 package that has
-      # it, and the license of this package.
+      # DLLs load, except the DLLs of Windows. For each DLL: its size, the MSYS2 package that has it, and
+      # the license of this package.
+      # `ntldd -R` reads the DLL names in the files, without running the programs. (`ldd` runs them,
+      # and failed here without a message.) It prints Windows paths, which `cygpath` converts.
       - name: List the DLLs that unar.exe and lsar.exe need
         run: |
           ls -l unar.exe lsar.exe
-          dlls="$(ldd unar.exe lsar.exe | awk '$3 ~ /^\/clang64\// { print $3 }' | sort -u)"
+          if ! output="$(ntldd -R unar.exe lsar.exe)"; then
+            echo "::error::ntldd failed."
+            exit 1
+          fi
+          echo "$output"
+          dlls="$(awk 'tolower($3) ~ /\\clang64\\bin\\/ { print $3 }' <<< "$output" | cygpath -u -f - | sort -u)"
           while IFS= read -r dll; do
             package="$(pacman -Qoq "$dll" 2> /dev/null || echo '(built here)')"
             license="$(pacman -Qi "$package" 2> /dev/null | sed -n 's/^Licenses *: //p')"

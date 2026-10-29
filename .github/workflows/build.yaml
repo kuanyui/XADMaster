@@ -112,8 +112,7 @@ jobs:
           fi
 
       # Make an LZH archive with a Shift_JIS file name that has が, with our lha.
-      # Then check that `unar -encoding Shift_JIS` extracts the file with this name and its content,
-      # and that the name has が as one character.
+      # Then check that `unar -encoding Shift_JIS` extracts the file with this name and its content.
       - name: Check a Shift_JIS file name with が in an LZH archive
         working-directory: ${{ runner.temp }}
         run: |
@@ -137,9 +136,17 @@ jobs:
           fi
           # macOS finds a file by either form of が: one character, or か and a combining ゛. So `cat`
           # above works with both. `ls` prints the name as it is written, so it tells which form unar wrote.
-          if [ "$(ls out)" != "$name" ]; then
-            echo "::error::unar does not write が as one character in the name of が.txt. The bytes of the name: $(ls out | od -An -tx1)"
+          # unar writes names through `-fileSystemRepresentation`, which gives the second form, as macOS
+          # usually does. So both forms are accepted: the name must be が.txt after composing it (NFC).
+          written="$(ls out)"
+          composed="$(printf '%s' "$written" | python3 -I -c 'import sys, unicodedata; print(unicodedata.normalize("NFC", sys.stdin.read()), end="")')"
+          if [ "$composed" != "$name" ]; then
+            echo "::error::The name of the extracted file is not が.txt, even after composing it (NFC). Its bytes: $(printf '%s' "$written" | od -An -tx1)"
             exit 1
+          elif [ "$written" = "$name" ]; then
+            echo "::notice::unar wrote が as one character."
+          else
+            echo "::notice::unar wrote が as か and a combining ゛ (NFD), as macOS usually does."
           fi
 
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) wants the programs to
@@ -315,3 +322,18 @@ jobs:
             echo "::error::unar does not extract the content of が.txt from test.lzh."
             exit 1
           fi
+
+      # To decide whether to pack them: the DLLs that unar.exe and lsar.exe load, and the DLLs that those
+      # DLLs load (`ldd`), except the DLLs of Windows. For each DLL: its size, the MSYS2 package that has
+      # it, and the license of this package.
+      - name: List the DLLs that unar.exe and lsar.exe need
+        run: |
+          ls -l unar.exe lsar.exe
+          dlls="$(ldd unar.exe lsar.exe | awk '$3 ~ /^\/clang64\// { print $3 }' | sort -u)"
+          while IFS= read -r dll; do
+            package="$(pacman -Qoq "$dll" 2> /dev/null || echo '?')"
+            license="$(pacman -Qi "$package" 2> /dev/null | sed -n 's/^Licenses *: //p')"
+            printf '%7d KB  %-36s %-44s %s\n' "$(( $(stat -c %s "$dll") / 1024 ))" "${dll##*/}" "$package" "$license"
+          done <<< "$dlls"
+          total_mb="$(xargs stat -c %s <<< "$dlls" | awk '{ sum += $1 } END { printf "%.1f", sum / 1048576 }')"
+          echo "::notice::unar.exe and lsar.exe need $(wc -l <<< "$dlls") DLLs of MSYS2, ${total_mb} MB in all."

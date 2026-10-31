@@ -20,16 +20,18 @@ Its changes to XADMaster:
   - macOS: universal binaries for Apple silicon (arm64) and Intel (x86_64), for macOS 12 or later.
     Before the build, the workflow links `lsar` to libc++ instead of libstdc++, which the macOS SDK
     no longer has. This change of `XADMaster.xcodeproj` is made in the workflow only.
-    The package `unar-macos-universal.zip` has `unar`, `lsar`, LICENSE, this file, and
-    `unar-src.zip`: the source code of XADMaster and UniversalDetector at the commits built.
+    The package `unar-macos-universal.zip` has `unar`, `lsar`, LICENSE and this file.
   - Windows (an experiment): built in MSYS2 (CLANG64), with GNUstep Base 1.31.1 that the workflow
     builds without ICU, TLS, XML and XSLT, and with two later fixes of GNUstep: commit bace6f54 (its
     configure test of constant strings) and https://github.com/gnustep/libs-base/pull/809 (no
     `__block` on an instance variable). Both changed files of GNUstep Base say so in a comment.
     The programs run on Windows 10 or later (x64), which has the C runtime that they use (UCRT).
     The package `unar-win64.zip` has `unar.exe`, `lsar.exe`, the DLLs that they need, LICENSE, this
-    file, `licenses/` (the license files of the DLLs), THIRD-PARTY.txt (the package, version and
-    license of each DLL, and for an LGPL or GPL one, where its source code is in `unar-src.zip`), and
-    `unar-src.zip`: the source code of XADMaster and UniversalDetector at the commits built, of
-    GNUstep Base as built, and the MSYS2 source package of each DLL under the LGPL or the GPL.
+    file, `licenses/` (the license files of the DLLs), and THIRD-PARTY.txt (the package, version and
+    license of each DLL, and for an LGPL or GPL one, where its source code is in `unar-src.tar.xz`).
+  - The source code of both release packages is in `unar-src.tar.xz`, a separate file of the same
+    release (https://github.com/kuanyui/XADMaster/releases): XADMaster and UniversalDetector at the
+    commits built (with this workflow, which shows how they and GNUstep Base are built), GNUstep Base
+    as built, and the MSYS2 source package of each DLL under the LGPL or the GPL. The LGPL allows the
+    source code to be a separate download from the same place as the programs (sections 4 and 6d).
 - This file.

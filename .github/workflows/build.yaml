@@ -151,18 +151,16 @@ jobs:
 
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) wants the programs to
       # come with the license, with notices of the changes, and with the source code that they are
-      # built from. So the package has `unar`, `lsar`, LICENSE, FORK_MODIFICATIONS.md, and
-      # unar-src.zip: the source code of both repositories at the commits built here (`git archive`,
-      # so without the files that the build generated), side by side as the build needs them.
-      - name: Pack unar and lsar with their source code
+      # built from. So the package has `unar`, `lsar`, LICENSE and FORK_MODIFICATIONS.md. The source
+      # code is unar-src.tar.xz: the job `build-windows` makes it for both release packages. The LGPL
+      # allows it to be a separate file, from the same place as the programs (sections 4 and 6d): the
+      # same release.
+      - name: Pack unar and lsar
         run: |
           name=unar-macos-universal
-          mkdir -p "dist/$name" "$RUNNER_TEMP/src"
+          mkdir -p "dist/$name"
           cp build/Release/unar build/Release/lsar LICENSE FORK_MODIFICATIONS.md "dist/$name/"
-          git archive --prefix=unar-src/XADMaster/ HEAD | tar -x -C "$RUNNER_TEMP/src"
-          git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ HEAD | tar -x -C "$RUNNER_TEMP/src"
-          (cd "$RUNNER_TEMP/src" && zip -r -X -q "$GITHUB_WORKSPACE/XADMaster/dist/$name/unar-src.zip" unar-src)
-          (cd "dist/$name" && zip -X "../$name.zip" unar lsar LICENSE FORK_MODIFICATIONS.md unar-src.zip)
+          (cd "dist/$name" && zip -X "../$name.zip" unar lsar LICENSE FORK_MODIFICATIONS.md)
           zipinfo "dist/$name.zip"
           # Unzip the ZIP, and run the unzipped `unar` and `lsar`.
           # This checks that the ZIP keeps their executable bit.
@@ -202,7 +200,7 @@ jobs:
       # programs need, in the last step. GNUstep Base is built below, with libffi and libiconv; `pkgconf`
       # helps its configure to find them. Its configure also requires the library of curl
       # (`mingw-w64-clang-x86_64-curl`, see below), as in the build of MSYS2. `zip` and `unzip` make and
-      # check the package.
+      # check the package, and `xz` compresses its source code.
       # A third-party action, so it is pinned to a commit: the tag `v2.33.0` could be moved to other code later, a commit cannot.
       - name: Setup MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
@@ -214,6 +212,7 @@ jobs:
             curl
             zip
             unzip
+            xz
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-lld
             mingw-w64-clang-x86_64-llvm-tools
@@ -350,7 +349,7 @@ jobs:
           table="${table//'%'/%25}"
           echo "::notice::${summary}%0A${table//$'\n'/%0A}"
 
-      # The source code of XADMaster and UniversalDetector for the package, as in `build-macos`.
+      # The source code of XADMaster and UniversalDetector, for unar-src.tar.xz (see the next step).
       # MSYS2 has no git: it is not installed there, and MSYS2 does not get the PATH of Windows (`path-type:
       # minimal` of setup-msys2). So this step uses Git Bash, with the git of the runner, which
       # actions/checkout uses too.
@@ -367,14 +366,17 @@ jobs:
       # - LICENSE, FORK_MODIFICATIONS.md, and `licenses/`: the license files of each MSYS2 package (from its
       #   share/licenses/) and of GNUstep Base.
       # - THIRD-PARTY.txt: for each DLL, its package, version and license, and for an LGPL or GPL one, where
-      #   its source code is in unar-src.zip.
-      # - unar-src.zip: XADMaster and UniversalDetector, as in `build-macos` (with this workflow, which shows
-      #   how GNUstep Base is built), GNUstep Base with its 2 changes, and the MSYS2 source package of each
-      #   DLL whose license has GPL (LGPL too). A source package has the PKGBUILD, the patches and the
-      #   upstream source code.
-      # The package must not go out without them: a missing license file, or a missing source code of an
-      # LGPL or GPL part, fails this step.
-      - name: Pack unar and lsar with their DLLs, licenses and source code
+      #   its source code is in unar-src.tar.xz.
+      # The source code is not in the package. It is in unar-src.tar.xz, for both release packages. The LGPL
+      # allows it to be a separate file, from the same place as the programs (sections 4 and 6d): the same
+      # release. It has XADMaster and UniversalDetector (with this workflow, which shows how they and
+      # GNUstep Base are built), GNUstep Base with its 2 changes, and the MSYS2 source package of each DLL
+      # whose license has GPL (LGPL too). A source package has the PKGBUILD, the patches and the upstream
+      # source code.
+      # For XADMaster and UniversalDetector, `xz -9e` makes a file 38% smaller than ZIP. The MSYS2 source
+      # packages are already compressed with zstd.
+      # This step fails if a license file, or the source code of an LGPL or GPL part, is missing.
+      - name: Pack unar and lsar with their DLLs and licenses, and make the source archive
         run: |
           tmp="$(cygpath -u "$RUNNER_TEMP")"
           name=unar-win64
@@ -386,12 +388,12 @@ jobs:
           tar -x -C "$tmp/src" -f "$tmp/XADMaster-src.tar"
           tar -x -C "$tmp/src" -f "$tmp/UniversalDetector-src.tar"
           cp -a "$gnustep" "$src/"
-          printf '%-36s %-44s %-14s %-40s %s\n' DLL Package Version License 'Source code in unar-src.zip' > "$dist/THIRD-PARTY.txt"
+          printf '%-36s %-44s %-14s %-40s %s\n' DLL Package Version License 'Source code in unar-src.tar.xz' > "$dist/THIRD-PARTY.txt"
           while IFS=$'\t' read -r dll package version license; do
             file="${dll##*/}"
             cp "$dll" "$dist/"
             if [ "$package" = '(built here)' ]; then
-              # Only the source code of GNUstep Base is in unar-src.zip.
+              # Only the source code of GNUstep Base is in unar-src.tar.xz.
               if [[ "$file" != *gnustep-base* ]]; then
                 echo "::error::$file is built here, but it is not the DLL of GNUstep Base, so its source code is missing."
                 exit 1
@@ -433,10 +435,11 @@ jobs:
           llvm-strip --strip-all "$dist/unar.exe" "$dist/lsar.exe"
           llvm-strip --strip-unneeded "$dist"/*gnustep-base*.dll
           ls -l "$dist"/*.exe "$dist"/*gnustep-base*.dll
-          (cd "$tmp/src" && zip -r -X -q "$dist/unar-src.zip" unar-src)
           (cd "$dist" && zip -r -X -q "../$name.zip" .)
           zipinfo "dist/$name.zip"
-          echo "::notice::$name.zip: $(( $(stat -c %s "dist/$name.zip") / 1024 )) KB. unar-src.zip in it: $(( $(stat -c %s "$dist/unar-src.zip") / 1024 )) KB."
+          tar -c -C "$tmp/src" unar-src | xz -9e > dist/unar-src.tar.xz
+          tar -t -J -f dist/unar-src.tar.xz | awk -F / 'NF > 2 { print $1 "/" $2 }' | sort -u
+          echo "::notice::$name.zip: $(( $(stat -c %s "dist/$name.zip") / 1024 )) KB. unar-src.tar.xz: $(( $(stat -c %s dist/unar-src.tar.xz) / 1024 )) KB."
 
       # Then the checks below run the programs of the package, as on a Windows without MSYS2:
       # - Unzip the package. This also checks the ZIP.
@@ -527,4 +530,12 @@ jobs:
         with:
           name: unar-win64
           path: XADMaster/dist/unar-win64.zip
+          if-no-files-found: error
+
+      # The source code of both packages.
+      - name: Upload the source code
+        uses: actions/upload-artifact@v7
+        with:
+          name: unar-src
+          path: XADMaster/dist/unar-src.tar.xz
           if-no-files-found: error

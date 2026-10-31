@@ -3,12 +3,46 @@ name: Build unar
 on:
   push:
     branches: [ master ]
+    # The name of a release tag is the version in unar.m and lsar.m without its `v` (see the job
+    # `version`), for example `1.10.7-ky20261031`.
+    # For such a tag, the job `release` also puts both packages and their source code on the release
+    # page of the tag.
+    tags: [ '*-ky[0-9]+' ]
 
 permissions:
   contents: read
 
 jobs:
+  # The version of this build: VERSION_STRING in unar.m and lsar.m, without its `v`, for example
+  # `1.10.7-ky20261031`. It is in the names of the files that the other jobs make.
+  # This job runs first, so a wrong tag stops the workflow before the builds.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the version in unar.m and lsar.m
+        id: read
+        run: |
+          # For example, `#define VERSION_STRING @"v1.10.7-ky20261031"` gives `1.10.7-ky20261031`.
+          read_version() { sed -n -E 's/^#define VERSION_STRING @"v([^"]+)"$/\1/p' "$1"; }
+          version="$(read_version unar.m)"
+          if [ -z "$version" ] || [ "$(read_version lsar.m)" != "$version" ]; then
+            echo "::error::unar.m and lsar.m must have the same VERSION_STRING."
+            exit 1
+          fi
+          # For a tag, the tag name must exactly match the version. This rule keeps the tag and the
+          # names of the files at the same version.
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::The tag '$GITHUB_REF_NAME' is not the version in unar.m ('$version')."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build-macos:
+    needs: version
     # Not `macos-latest`: GitHub moves that label to newer versions of macOS and Xcode.
     # A newer Xcode may build `unar` differently, or reject MACOSX_DEPLOYMENT_TARGET below.
     runs-on: macos-26
@@ -23,6 +57,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '12.0'
       # Our lha (https://github.com/kuanyui/lha), only to make the LZH archive for a test below.
       LHA_VERSION: 1.14i-ac20260723-ky20261029
+      UNAR_VERSION: ${{ needs.version.outputs.version }}
     steps:
       # The Xcode project of XADMaster expects UniversalDetector next to it, in `../UniversalDetector`.
       - uses: actions/checkout@v7
@@ -152,12 +187,12 @@ jobs:
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) wants the programs to
       # come with the license, with notices of the changes, and with the source code that they are
       # built from. So the package has `unar`, `lsar`, LICENSE and FORK_MODIFICATIONS.md. The source
-      # code is unar-src.tar.xz: the job `build-windows` makes it for both release packages. The LGPL
+      # code is unar-VERSION-src.tar.xz: the job `build-windows` makes it for both release packages. The LGPL
       # allows it to be a separate file, from the same place as the programs (sections 4 and 6d): the
       # same release.
       - name: Pack unar and lsar
         run: |
-          name=unar-macos-universal
+          name="unar-$UNAR_VERSION-macos-universal"
           mkdir -p "dist/$name"
           cp build/Release/unar build/Release/lsar LICENSE FORK_MODIFICATIONS.md "dist/$name/"
           (cd "dist/$name" && zip -X "../$name.zip" unar lsar LICENSE FORK_MODIFICATIONS.md)
@@ -172,17 +207,20 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: unar-macos-universal
-          path: XADMaster/dist/unar-macos-universal.zip
+          path: XADMaster/dist/unar-*-macos-universal.zip
           if-no-files-found: error
 
   # An experiment: can `unar` and `lsar` be built for Windows with GNUstep, in MSYS2?
   # The programs need the DLLs of GNUstep Base (built here, slim) and some DLLs of MSYS2, which are packed with them.
   build-windows:
+    needs: version
     runs-on: windows-latest
     defaults:
       run:
         shell: msys2 {0}
         working-directory: XADMaster
+    env:
+      UNAR_VERSION: ${{ needs.version.outputs.version }}
     steps:
       # The same 2 repositories as in `build-macos`.
       - uses: actions/checkout@v7
@@ -349,15 +387,15 @@ jobs:
           table="${table//'%'/%25}"
           echo "::notice::${summary}%0A${table//$'\n'/%0A}"
 
-      # The source code of XADMaster and UniversalDetector, for unar-src.tar.xz (see the next step).
+      # The source code of XADMaster and UniversalDetector, for unar-VERSION-src.tar.xz (see the next step).
       # MSYS2 has no git: it is not installed there, and MSYS2 does not get the PATH of Windows (`path-type:
       # minimal` of setup-msys2). So this step uses Git Bash, with the git of the runner, which
       # actions/checkout uses too.
       - name: Archive the source code of XADMaster and UniversalDetector
         shell: bash
         run: |
-          git archive --prefix=unar-src/XADMaster/ -o "$RUNNER_TEMP/XADMaster-src.tar" HEAD
-          git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ -o "$RUNNER_TEMP/UniversalDetector-src.tar" HEAD
+          git archive --prefix="unar-$UNAR_VERSION-src/XADMaster/" -o "$RUNNER_TEMP/XADMaster-src.tar" HEAD
+          git -C ../UniversalDetector archive --prefix="unar-$UNAR_VERSION-src/UniversalDetector/" -o "$RUNNER_TEMP/UniversalDetector-src.tar" HEAD
 
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) and the licenses of the DLLs
       # want the programs to come with the licenses, with notices of the changes, and with the source code
@@ -366,8 +404,8 @@ jobs:
       # - LICENSE, FORK_MODIFICATIONS.md, and `licenses/`: the license files of each MSYS2 package (from its
       #   share/licenses/) and of GNUstep Base.
       # - THIRD-PARTY.txt: for each DLL, its package, version and license, and for an LGPL or GPL one, where
-      #   its source code is in unar-src.tar.xz.
-      # The source code is not in the package. It is in unar-src.tar.xz, for both release packages. The LGPL
+      #   its source code is in unar-VERSION-src.tar.xz.
+      # The source code is not in the package. It is in unar-VERSION-src.tar.xz, for both release packages. The LGPL
       # allows it to be a separate file, from the same place as the programs (sections 4 and 6d): the same
       # release. It has XADMaster and UniversalDetector (with this workflow, which shows how they and
       # GNUstep Base are built), GNUstep Base with its 2 changes, and the MSYS2 source package of each DLL
@@ -379,21 +417,22 @@ jobs:
       - name: Pack unar and lsar with their DLLs and licenses, and make the source archive
         run: |
           tmp="$(cygpath -u "$RUNNER_TEMP")"
-          name=unar-win64
+          name="unar-$UNAR_VERSION-win64"
+          source_archive="unar-$UNAR_VERSION-src.tar.xz"
           dist="$PWD/dist/$name"
-          src="$tmp/src/unar-src"
+          src="$tmp/src/${source_archive%.tar.xz}"
           gnustep="$tmp/gnustep-base-src/gnustep-base-1.31.1"
           mkdir -p "$dist/licenses" "$src/msys2"
           cp unar.exe lsar.exe LICENSE FORK_MODIFICATIONS.md "$dist/"
           tar -x -C "$tmp/src" -f "$tmp/XADMaster-src.tar"
           tar -x -C "$tmp/src" -f "$tmp/UniversalDetector-src.tar"
           cp -a "$gnustep" "$src/"
-          printf '%-36s %-44s %-14s %-40s %s\n' DLL Package Version License 'Source code in unar-src.tar.xz' > "$dist/THIRD-PARTY.txt"
+          printf '%-36s %-44s %-14s %-40s %s\n' DLL Package Version License "Source code in $source_archive" > "$dist/THIRD-PARTY.txt"
           while IFS=$'\t' read -r dll package version license; do
             file="${dll##*/}"
             cp "$dll" "$dist/"
             if [ "$package" = '(built here)' ]; then
-              # Only the source code of GNUstep Base is in unar-src.tar.xz.
+              # Only the source code of GNUstep Base is in the source archive.
               if [[ "$file" != *gnustep-base* ]]; then
                 echo "::error::$file is built here, but it is not the DLL of GNUstep Base, so its source code is missing."
                 exit 1
@@ -437,9 +476,9 @@ jobs:
           ls -l "$dist"/*.exe "$dist"/*gnustep-base*.dll
           (cd "$dist" && zip -r -X -q "../$name.zip" .)
           zipinfo "dist/$name.zip"
-          tar -c -C "$tmp/src" unar-src | xz -9e > dist/unar-src.tar.xz
-          tar -t -J -f dist/unar-src.tar.xz | awk -F / 'NF > 2 { print $1 "/" $2 }' | sort -u
-          echo "::notice::$name.zip: $(( $(stat -c %s "dist/$name.zip") / 1024 )) KB. unar-src.tar.xz: $(( $(stat -c %s dist/unar-src.tar.xz) / 1024 )) KB."
+          tar -c -C "$tmp/src" "${src##*/}" | xz -9e > "dist/$source_archive"
+          tar -t -J -f "dist/$source_archive" | awk -F / 'NF > 2 { print $1 "/" $2 }' | sort -u
+          echo "::notice::$name.zip: $(( $(stat -c %s "dist/$name.zip") / 1024 )) KB. $source_archive: $(( $(stat -c %s "dist/$source_archive") / 1024 )) KB."
 
       # Then the checks below run the programs of the package, as on a Windows without MSYS2:
       # - Unzip the package. This also checks the ZIP.
@@ -449,7 +488,7 @@ jobs:
       - name: Unzip the package, and hide CLANG64 of MSYS2
         run: |
           tmp="$(cygpath -u "$RUNNER_TEMP")"
-          unzip -q dist/unar-win64.zip -d "$tmp/unar-win64"
+          unzip -q "dist/unar-$UNAR_VERSION-win64.zip" -d "$tmp/unar-win64"
           mv "$MINGW_PREFIX" "$MINGW_PREFIX-hidden"
           "$tmp/unar-win64/unar.exe" -version
           "$tmp/unar-win64/lsar.exe" -version
@@ -529,7 +568,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: unar-win64
-          path: XADMaster/dist/unar-win64.zip
+          path: XADMaster/dist/unar-*-win64.zip
           if-no-files-found: error
 
       # The source code of both packages.
@@ -537,5 +576,40 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: unar-src
-          path: XADMaster/dist/unar-src.tar.xz
+          path: XADMaster/dist/unar-*-src.tar.xz
           if-no-files-found: error
+
+  # Only for a release tag: create the release page of the tag, with the packages and the source code
+  # that `build-macos` and `build-windows` made.
+  # This job never replaces a published file: if the release page already exists, this job fails
+  # instead.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [ build-macos, build-windows ]
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create the release page and to upload files to it.
+      contents: write
+    steps:
+      # The 3 artifacts: `unar-macos-universal`, `unar-win64` and `unar-src`.
+      # Their files go into the same folder.
+      - name: Download the packages and the source code
+        uses: actions/download-artifact@v8
+        with:
+          pattern: unar-*
+          path: dist
+          merge-multiple: true
+
+      # `gh` (GitHub CLI) is already on the runner, so no third-party action runs with write permission.
+      # It creates the release as a draft, uploads the files, and then publishes it.
+      # `--verify-tag`: without it, a missing tag would be created from the default branch.
+      - name: Create the release page with the packages and the source code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/unar-*-macos-universal.zip \
+            dist/unar-*-win64.zip \
+            dist/unar-*-src.tar.xz \
+            --verify-tag --title "$GITHUB_REF_NAME"

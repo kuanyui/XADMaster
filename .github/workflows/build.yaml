@@ -350,6 +350,16 @@ jobs:
           table="${table//'%'/%25}"
           echo "::notice::${summary}%0A${table//$'\n'/%0A}"
 
+      # The source code of XADMaster and UniversalDetector for the package, as in `build-macos`.
+      # MSYS2 has no git: it is not installed there, and MSYS2 does not get the PATH of Windows (`path-type:
+      # minimal` of setup-msys2). So this step uses Git Bash, with the git of the runner, which
+      # actions/checkout uses too.
+      - name: Archive the source code of XADMaster and UniversalDetector
+        shell: bash
+        run: |
+          git archive --prefix=unar-src/XADMaster/ -o "$RUNNER_TEMP/XADMaster-src.tar" HEAD
+          git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ -o "$RUNNER_TEMP/UniversalDetector-src.tar" HEAD
+
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) and the licenses of the DLLs
       # want the programs to come with the licenses, with notices of the changes, and with the source code
       # of the parts under the LGPL or the GPL. So the package has:
@@ -373,8 +383,8 @@ jobs:
           gnustep="$tmp/gnustep-base-src/gnustep-base-1.31.1"
           mkdir -p "$dist/licenses" "$src/msys2"
           cp unar.exe lsar.exe LICENSE FORK_MODIFICATIONS.md "$dist/"
-          git archive --prefix=unar-src/XADMaster/ HEAD | tar -x -C "$tmp/src"
-          git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ HEAD | tar -x -C "$tmp/src"
+          tar -x -C "$tmp/src" -f "$tmp/XADMaster-src.tar"
+          tar -x -C "$tmp/src" -f "$tmp/UniversalDetector-src.tar"
           cp -a "$gnustep" "$src/"
           printf '%-36s %-44s %-14s %-40s %s\n' DLL Package Version License 'Source code in unar-src.zip' > "$dist/THIRD-PARTY.txt"
           while IFS=$'\t' read -r dll package version license; do
@@ -416,9 +426,17 @@ jobs:
             printf '%-36s %-44s %-14s %-40s %s\n' "$file" "$package" "$version" "$license" "$source" >> "$dist/THIRD-PARTY.txt"
           done < "$tmp/dlls.tsv"
           cat "$dist/THIRD-PARTY.txt"
+          # A smaller package: remove the debug information and the symbols of the files built here, as
+          # makepkg does for the packages of MSYS2 (`--strip-all` for programs, `--strip-unneeded` for DLLs).
+          # The DLLs of MSYS2 are already stripped.
+          ls -l "$dist"/*.exe "$dist"/*gnustep-base*.dll
+          llvm-strip --strip-all "$dist/unar.exe" "$dist/lsar.exe"
+          llvm-strip --strip-unneeded "$dist"/*gnustep-base*.dll
+          ls -l "$dist"/*.exe "$dist"/*gnustep-base*.dll
           (cd "$tmp/src" && zip -r -X -q "$dist/unar-src.zip" unar-src)
           (cd "$dist" && zip -r -X -q "../$name.zip" .)
           zipinfo "dist/$name.zip"
+          echo "::notice::$name.zip: $(( $(stat -c %s "dist/$name.zip") / 1024 )) KB. unar-src.zip in it: $(( $(stat -c %s "$dist/unar-src.zip") / 1024 )) KB."
 
       # Then the checks below run the programs of the package, as on a Windows without MSYS2:
       # - Unzip the package. This also checks the ZIP.

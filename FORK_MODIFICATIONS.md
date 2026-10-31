@@ -25,5 +25,11 @@ Its changes to XADMaster:
   - Windows (an experiment): built in MSYS2 (CLANG64), with GNUstep Base 1.31.1 that the workflow
     builds without ICU, TLS, XML and XSLT, and with two later fixes of GNUstep: commit bace6f54 (its
     configure test of constant strings) and https://github.com/gnustep/libs-base/pull/809 (no
-    `__block` on an instance variable). Nothing is packed yet.
+    `__block` on an instance variable). Both changed files of GNUstep Base say so in a comment.
+    The programs run on Windows 10 or later (x64), which has the C runtime that they use (UCRT).
+    The package `unar-win64.zip` has `unar.exe`, `lsar.exe`, the DLLs that they need, LICENSE, this
+    file, `licenses/` (the license files of the DLLs), THIRD-PARTY.txt (the package, version and
+    license of each DLL, and for an LGPL or GPL one, where its source code is in `unar-src.zip`), and
+    `unar-src.zip`: the source code of XADMaster and UniversalDetector at the commits built, of
+    GNUstep Base as built, and the MSYS2 source package of each DLL under the LGPL or the GPL.
 - This file.

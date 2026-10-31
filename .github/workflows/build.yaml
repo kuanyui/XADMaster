@@ -178,7 +178,7 @@ jobs:
           if-no-files-found: error
 
   # An experiment: can `unar` and `lsar` be built for Windows with GNUstep, in MSYS2?
-  # Nothing is packed yet. The programs need the DLLs of GNUstep Base (built here, slim) and some DLLs of MSYS2.
+  # The programs need the DLLs of GNUstep Base (built here, slim) and some DLLs of MSYS2, which are packed with them.
   build-windows:
     runs-on: windows-latest
     defaults:
@@ -201,7 +201,8 @@ jobs:
       # `gnustep-make` has `gnustep-config`, `llvm-tools` has `ar`, and `ntldd` lists the DLLs that the
       # programs need, in the last step. GNUstep Base is built below, with libffi and libiconv; `pkgconf`
       # helps its configure to find them. Its configure also requires the library of curl
-      # (`mingw-w64-clang-x86_64-curl`, see below), as in the build of MSYS2.
+      # (`mingw-w64-clang-x86_64-curl`, see below), as in the build of MSYS2. `zip` and `unzip` make and
+      # check the package.
       # A third-party action, so it is pinned to a commit: the tag `v2.33.0` could be moved to other code later, a commit cannot.
       - name: Setup MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
@@ -211,6 +212,8 @@ jobs:
           install: >-
             make
             curl
+            zip
+            unzip
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-lld
             mingw-w64-clang-x86_64-llvm-tools
@@ -238,6 +241,9 @@ jobs:
       # configure requires libcurl with the Objective-C 2.0 runtime (libobjc2), but only NSURLSession uses
       # it, which also needs libdispatch and is disabled here. A DLL imports only the functions that it
       # uses, so the DLL of GNUstep Base does not need the DLL of curl, as in the build of MSYS2.
+      # The package has the source code of this DLL (LGPL-2.1-or-later). LGPL-2.1 (section 2a) wants each
+      # changed file to say that it was changed, and when. So both changed files get a comment that says so.
+      # The source code is copied before configure, which adds its own files.
       - name: Build a slim GNUstep Base 1.31.1
         working-directory: ${{ runner.temp }}
         run: |
@@ -249,12 +255,17 @@ jobs:
           curl -fsSL -o config/config.constant-string-class.m \
             https://raw.githubusercontent.com/gnustep/libs-base/bace6f54fd5fb882cb3adc79c87cc82d5c6d9c70/config/config.constant-string-class.m
           echo "dbd1e3c0ba830b139117a19e94292add21dd76a109301f48049f5ebd52694cfe  config/config.constant-string-class.m" | sha256sum -c
+          notice='Changed on 2026-10-29 by https://github.com/kuanyui/XADMaster'
+          sed -i "1i /* $notice: this file is from commit bace6f54 of GNUstep Base, not from 1.31.1. */" \
+            config/config.constant-string-class.m
           header=Headers/Foundation/NSBackgroundActivityScheduler.h
-          sed -i 's/BLOCK_SCOPE GSScheduledBlock _block;/GSScheduledBlock _block;/' "$header"
+          sed -i "s|BLOCK_SCOPE GSScheduledBlock _block;|GSScheduledBlock _block;  /* $notice: no BLOCK_SCOPE, as in pull request #809 of GNUstep Base. */|" "$header"
           if grep -q -F 'BLOCK_SCOPE GSScheduledBlock _block;' "$header"; then
             echo "::error::$header still has BLOCK_SCOPE on the instance variable _block."
             exit 1
           fi
+          mkdir ../gnustep-base-src
+          cp -a "$PWD" ../gnustep-base-src/
           export CC=clang CXX=clang++ OBJCFLAGS=-Wno-incompatible-pointer-types
           ./configure --prefix="$MINGW_PREFIX" --disable-icu --disable-tls --disable-xml --disable-xslt --disable-nsurlsession
           make -j"$(nproc)"
@@ -296,12 +307,138 @@ jobs:
           ./unar.exe -version
           ./lsar.exe -version
 
-      # The same check as in `build-macos`. The DLLs of MSYS2 are found through PATH.
+      # The DLLs that unar.exe and lsar.exe load, and the DLLs that those DLLs load, except the DLLs of
+      # Windows. For each DLL: its size, the MSYS2 package that has it, and the license of this package.
+      # The next step packs them, from the list in dlls.tsv. The table is also an annotation, which can be
+      # read without logging in to GitHub.
+      # `ntldd -R` reads the DLL names in the files, without running the programs. (`ldd` runs them,
+      # and failed here without a message.) It prints Windows paths, which `cygpath` converts.
+      - name: List the DLLs that unar.exe and lsar.exe need
+        run: |
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          ls -l unar.exe lsar.exe
+          if ! output="$(ntldd -R unar.exe lsar.exe)"; then
+            echo "::error::ntldd failed."
+            exit 1
+          fi
+          echo "$output"
+          dlls="$(awk 'tolower($3) ~ /\\clang64\\bin\\/ { print $3 }' <<< "$output" | cygpath -u -f - | sort -u)"
+          # unar.exe needs at least the DLL of GNUstep Base. So an empty list means that the output of
+          # ntldd was not understood.
+          if [ -z "$dlls" ]; then
+            echo "::error::The output of ntldd has no DLL of MSYS2."
+            exit 1
+          fi
+          table=
+          total=0
+          : > "$tmp/dlls.tsv"
+          while IFS= read -r dll; do
+            size="$(stat -c %s "$dll")"
+            total=$(( total + size ))
+            # The DLL of GNUstep Base is built here, so it belongs to no package, and `pacman -Q` fails.
+            # `|| true`: with `-o pipefail`, the failure of `pacman` in a pipe would stop the step.
+            package="$(pacman -Qoq "$dll" 2> /dev/null || echo '(built here)')"
+            version="$(pacman -Q "$package" 2> /dev/null | awk '{ print $2 }' || true)"
+            license="$(pacman -Qi "$package" 2> /dev/null | sed -n 's/^Licenses *: //p' || true)"
+            printf '%s\t%s\t%s\t%s\n' "$dll" "$package" "$version" "$license" >> "$tmp/dlls.tsv"
+            table+="$(printf '%7d KB  %-36s %-44s %s' "$(( size / 1024 ))" "${dll##*/}" "$package" "$license")"$'\n'
+          done <<< "$dlls"
+          printf '%s' "$table"
+          mb="$(awk -v bytes="$total" 'BEGIN { printf "%.1f", bytes / 1048576 }')"
+          summary="unar.exe and lsar.exe need $(wc -l <<< "$dlls") DLLs of MSYS2, $mb MB in all."
+          # In an annotation, % is written as %25, and a line end as %0A.
+          table="${table//'%'/%25}"
+          echo "::notice::${summary}%0A${table//$'\n'/%0A}"
+
+      # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) and the licenses of the DLLs
+      # want the programs to come with the licenses, with notices of the changes, and with the source code
+      # of the parts under the LGPL or the GPL. So the package has:
+      # - unar.exe, lsar.exe, and the DLLs listed above next to them, where Windows looks for DLLs first.
+      # - LICENSE, FORK_MODIFICATIONS.md, and `licenses/`: the license files of each MSYS2 package (from its
+      #   share/licenses/) and of GNUstep Base.
+      # - THIRD-PARTY.txt: for each DLL, its package, version and license, and for an LGPL or GPL one, where
+      #   its source code is in unar-src.zip.
+      # - unar-src.zip: XADMaster and UniversalDetector, as in `build-macos` (with this workflow, which shows
+      #   how GNUstep Base is built), GNUstep Base with its 2 changes, and the MSYS2 source package of each
+      #   DLL whose license has GPL (LGPL too). A source package has the PKGBUILD, the patches and the
+      #   upstream source code.
+      # The package must not go out without them: a missing license file, or a missing source code of an
+      # LGPL or GPL part, fails this step.
+      - name: Pack unar and lsar with their DLLs, licenses and source code
+        run: |
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          name=unar-win64
+          dist="$PWD/dist/$name"
+          src="$tmp/src/unar-src"
+          gnustep="$tmp/gnustep-base-src/gnustep-base-1.31.1"
+          mkdir -p "$dist/licenses" "$src/msys2"
+          cp unar.exe lsar.exe LICENSE FORK_MODIFICATIONS.md "$dist/"
+          git archive --prefix=unar-src/XADMaster/ HEAD | tar -x -C "$tmp/src"
+          git -C ../UniversalDetector archive --prefix=unar-src/UniversalDetector/ HEAD | tar -x -C "$tmp/src"
+          cp -a "$gnustep" "$src/"
+          printf '%-36s %-44s %-14s %-40s %s\n' DLL Package Version License 'Source code in unar-src.zip' > "$dist/THIRD-PARTY.txt"
+          while IFS=$'\t' read -r dll package version license; do
+            file="${dll##*/}"
+            cp "$dll" "$dist/"
+            if [ "$package" = '(built here)' ]; then
+              # Only the source code of GNUstep Base is in unar-src.zip.
+              if [[ "$file" != *gnustep-base* ]]; then
+                echo "::error::$file is built here, but it is not the DLL of GNUstep Base, so its source code is missing."
+                exit 1
+              fi
+              package=gnustep-base version=1.31.1 license=LGPL-2.1-or-later source="${gnustep##*/}/"
+              mkdir -p "$dist/licenses/gnustep-base"
+              cp "$gnustep"/COPYING* "$dist/licenses/gnustep-base/"
+            else
+              # Keep the folders under share/licenses/, so that 2 files with the same name do not collide.
+              licenses="$(pacman -Qlq "$package" | grep '/share/licenses/' | grep -v '/$' || true)"
+              if [ -z "$licenses" ]; then
+                echo "::error::The package $package of $file has no license file under share/licenses/."
+                exit 1
+              fi
+              while IFS= read -r license_file; do
+                relative="${license_file#*/share/licenses/}"
+                mkdir -p "$dist/licenses/$(dirname "$relative")"
+                cp "$license_file" "$dist/licenses/$relative"
+              done <<< "$licenses"
+              source=-
+              if grep -q -i gpl <<< "$license"; then
+                # The name of the source package: %BASE% in the database of pacman, and the version, with `~`
+                # instead of the `:` after an epoch, as in the file names of MSYS2.
+                base="$(sed -n '/^%BASE%$/ { n; p; q }' "/var/lib/pacman/local/$package-$version/desc" || true)"
+                source="msys2/$base-${version/:/\~}.src.tar.zst"
+                if [ -z "$base" ] || ! curl -fsSL -o "$src/$source" "https://repo.msys2.org/mingw/sources/${source#msys2/}"; then
+                  echo "::error::Cannot download the source package of $package $version (${source#msys2/})."
+                  exit 1
+                fi
+              fi
+            fi
+            printf '%-36s %-44s %-14s %-40s %s\n' "$file" "$package" "$version" "$license" "$source" >> "$dist/THIRD-PARTY.txt"
+          done < "$tmp/dlls.tsv"
+          cat "$dist/THIRD-PARTY.txt"
+          (cd "$tmp/src" && zip -r -X -q "$dist/unar-src.zip" unar-src)
+          (cd "$dist" && zip -r -X -q "../$name.zip" .)
+          zipinfo "dist/$name.zip"
+
+      # Then the checks below run the programs of the package, as on a Windows without MSYS2:
+      # - Unzip the package. This also checks the ZIP.
+      # - Hide CLANG64 of MSYS2: its DLLs, and the files that GNUstep Base may look for at their paths in
+      #   MSYS2. A DLL or a file missing from the package then makes a check fail.
+      # The commands of the checks (bash, gzip, od...) are in /usr/bin of MSYS2, not in CLANG64.
+      - name: Unzip the package, and hide CLANG64 of MSYS2
+        run: |
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          unzip -q dist/unar-win64.zip -d "$tmp/unar-win64"
+          mv "$MINGW_PREFIX" "$MINGW_PREFIX-hidden"
+          "$tmp/unar-win64/unar.exe" -version
+          "$tmp/unar-win64/lsar.exe" -version
+
+      # The same check as in `build-macos`, with the programs of the package.
       # On Windows, lsar.exe may print a line end as `\r\n`, so `tr` removes the `\r`.
       - name: Check a gzip file
         working-directory: ${{ runner.temp }}
         run: |
-          bin="$(cygpath -u "$GITHUB_WORKSPACE")/XADMaster"
+          bin="$(cygpath -u "$RUNNER_TEMP")/unar-win64"
           mkdir gzip-test
           cd gzip-test
           echo hello > hello.txt
@@ -329,7 +466,7 @@ jobs:
       - name: Check が.txt in LZH archives, in Shift_JIS, EUC-JP and UTF-8
         working-directory: ${{ runner.temp }}
         run: |
-          bin="$(cygpath -u "$GITHUB_WORKSPACE")/XADMaster"
+          bin="$(cygpath -u "$RUNNER_TEMP")/unar-win64"
           name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
           mkdir lzh-test
           cd lzh-test
@@ -367,24 +504,9 @@ jobs:
             exit 1
           fi
 
-      # To decide whether to pack them: the DLLs that unar.exe and lsar.exe load, and the DLLs that those
-      # DLLs load, except the DLLs of Windows. For each DLL: its size, the MSYS2 package that has it, and
-      # the license of this package.
-      # `ntldd -R` reads the DLL names in the files, without running the programs. (`ldd` runs them,
-      # and failed here without a message.) It prints Windows paths, which `cygpath` converts.
-      - name: List the DLLs that unar.exe and lsar.exe need
-        run: |
-          ls -l unar.exe lsar.exe
-          if ! output="$(ntldd -R unar.exe lsar.exe)"; then
-            echo "::error::ntldd failed."
-            exit 1
-          fi
-          echo "$output"
-          dlls="$(awk 'tolower($3) ~ /\\clang64\\bin\\/ { print $3 }' <<< "$output" | cygpath -u -f - | sort -u)"
-          while IFS= read -r dll; do
-            package="$(pacman -Qoq "$dll" 2> /dev/null || echo '(built here)')"
-            license="$(pacman -Qi "$package" 2> /dev/null | sed -n 's/^Licenses *: //p')"
-            printf '%7d KB  %-36s %-44s %s\n' "$(( $(stat -c %s "$dll") / 1024 ))" "${dll##*/}" "$package" "$license"
-          done <<< "$dlls"
-          total_mb="$(xargs stat -c %s <<< "$dlls" | awk '{ sum += $1 } END { printf "%.1f", sum / 1048576 }')"
-          echo "::notice::unar.exe and lsar.exe need $(wc -l <<< "$dlls") DLLs of MSYS2, ${total_mb} MB in all."
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: unar-win64
+          path: XADMaster/dist/unar-win64.zip
+          if-no-files-found: error

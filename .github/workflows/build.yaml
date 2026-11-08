@@ -5,7 +5,7 @@ on:
     branches: [ master ]
     # The name of a release tag is the version in unar.m and lsar.m without its `v` (see the job
     # `version`), for example `1.10.7-ky20261031`.
-    # For such a tag, the job `release` also puts both packages and their source code on the release
+    # For such a tag, the job `release` also puts all the packages and their source code on the release
     # page of the tag.
     tags: [ '*-ky[0-9]+' ]
 
@@ -187,7 +187,7 @@ jobs:
       # The license of XADMaster and UniversalDetector (LGPL-2.1, see LICENSE) wants the programs to
       # come with the license, with notices of the changes, and with the source code that they are
       # built from. So the package has `unar`, `lsar`, LICENSE and FORK_MODIFICATIONS.md. The source
-      # code is unar-VERSION-src.tar.xz: the job `build-windows` makes it for both release packages. The LGPL
+      # code is unar-VERSION-src.tar.xz: the job `build-windows` makes it for all the release packages. The LGPL
       # allows it to be a separate file, from the same place as the programs (sections 4 and 6d): the
       # same release.
       - name: Pack unar and lsar
@@ -280,6 +280,7 @@ jobs:
       # uses, so the DLL of GNUstep Base does not need the DLL of curl, as in the build of MSYS2.
       # The package has the source code of this DLL (LGPL-2.1-or-later). LGPL-2.1 (section 2a) wants each
       # changed file to say that it was changed, and when. So both changed files get a comment that says so.
+      # `build-linux` builds the same source code: keep the download and the 2 changes the same in both jobs.
       # The source code is copied before configure, which adds its own files.
       - name: Build a slim GNUstep Base 1.31.1
         working-directory: ${{ runner.temp }}
@@ -405,7 +406,7 @@ jobs:
       #   share/licenses/) and of GNUstep Base.
       # - THIRD-PARTY.txt: for each DLL, its package, version and license, and for an LGPL or GPL one, where
       #   its source code is in unar-VERSION-src.tar.xz.
-      # The source code is not in the package. It is in unar-VERSION-src.tar.xz, for both release packages. The LGPL
+      # The source code is not in the package. It is in unar-VERSION-src.tar.xz, for all the release packages. The LGPL
       # allows it to be a separate file, from the same place as the programs (sections 4 and 6d): the same
       # release. It has XADMaster and UniversalDetector (with this workflow, which shows how they and
       # GNUstep Base are built), GNUstep Base with its 2 changes, and the MSYS2 source package of each DLL
@@ -571,7 +572,7 @@ jobs:
           path: XADMaster/dist/unar-*-win64.zip
           if-no-files-found: error
 
-      # The source code of both packages.
+      # The source code of all the packages.
       - name: Upload the source code
         uses: actions/upload-artifact@v7
         with:
@@ -579,19 +580,415 @@ jobs:
           path: XADMaster/dist/unar-*-src.tar.xz
           if-no-files-found: error
 
+  # `unar` and `lsar` for Linux (x86_64), packed with GNUstep Base (built here) and the libraries of Ubuntu
+  # that the programs need.
+  build-linux:
+    needs: version
+    # Not `ubuntu-latest`: a newer Ubuntu would make the package need a newer glibc than Ubuntu 24.04 has.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        # `shell: bash` adds `-o pipefail`: when a command in a pipe fails, the step fails too.
+        shell: bash
+        working-directory: XADMaster
+    env:
+      UNAR_VERSION: ${{ needs.version.outputs.version }}
+      # The glibc and the libstdc++ of Ubuntu 24.04 (GCC 14).
+      MAX_GLIBC_VERSION: '2.39'
+      MAX_GLIBCXX_VERSION: '3.4.33'
+      # Not packed: every Linux system with glibc has these libraries.
+      SYSTEM_LIBRARIES: '^(libc|libm|libpthread|libdl|librt|libresolv|libutil)\.so\.[0-9]+$|^libstdc\+\+\.so\.6$|^libgcc_s\.so\.1$'
+    steps:
+      # The same 2 repositories as in `build-macos`.
+      - uses: actions/checkout@v7
+        with:
+          path: XADMaster
+
+      - uses: actions/checkout@v7
+        with:
+          repository: MacPaw/universal-detector
+          ref: 4eb832d999628edcd3d134e46bd35357c8c99a85
+          path: UniversalDetector
+
+      # gcc with the Objective-C runtime of GCC, as Debian and Ubuntu build their GNUstep and unar.
+      - name: Install the compilers, gnustep-make and the libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gobjc g++ gnustep-make libffi-dev libicu-dev zlib1g-dev libbz2-dev libwavpack-dev \
+            patchelf zip unzip
+          gcc --version
+
+      # The same source code as in `build-windows`, so its unar-VERSION-src.tar.xz covers this package too.
+      # - `ac_cv_header_*=no`: configure has no option to disable libcurl and GMP, which the runner may have.
+      # - `--with-config-file=./GNUstep.conf` and `--disable-environment-config-file`: a GNUstep installed on
+      #   the user's system cannot change this GNUstep Base, as on Windows. `./` is the folder of the library.
+      - name: Build a slim GNUstep Base 1.31.1
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o gnustep-base.tar.gz \
+            https://github.com/gnustep/libs-base/releases/download/base-1_31_1/gnustep-base-1.31.1.tar.gz
+          echo "e7546f1c978a7c75b676953a360194a61e921cb45a4804497b4f346a460545cd  gnustep-base.tar.gz" | sha256sum -c
+          tar -xzf gnustep-base.tar.gz
+          cd gnustep-base-1.31.1
+          curl -fsSL -o config/config.constant-string-class.m \
+            https://raw.githubusercontent.com/gnustep/libs-base/bace6f54fd5fb882cb3adc79c87cc82d5c6d9c70/config/config.constant-string-class.m
+          echo "dbd1e3c0ba830b139117a19e94292add21dd76a109301f48049f5ebd52694cfe  config/config.constant-string-class.m" | sha256sum -c
+          notice='Changed on 2026-10-29 by https://github.com/kuanyui/XADMaster'
+          sed -i "1i /* $notice: this file is from commit bace6f54 of GNUstep Base, not from 1.31.1. */" \
+            config/config.constant-string-class.m
+          header=Headers/Foundation/NSBackgroundActivityScheduler.h
+          sed -i "s|BLOCK_SCOPE GSScheduledBlock _block;|GSScheduledBlock _block;  /* $notice: no BLOCK_SCOPE, as in pull request #809 of GNUstep Base. */|" "$header"
+          if grep -q -F 'BLOCK_SCOPE GSScheduledBlock _block;' "$header"; then
+            echo "::error::$header still has BLOCK_SCOPE on the instance variable _block."
+            exit 1
+          fi
+          ./configure --disable-icu --disable-tls --disable-xml --disable-xslt --disable-nsurlsession \
+            --disable-zeroconf --disable-libdispatch \
+            --with-config-file=./GNUstep.conf --disable-environment-config-file \
+            ac_cv_header_curl_curl_h=no ac_cv_header_gmp_h=no
+          make -j"$(nproc)"
+          make install DESTDIR="$RUNNER_TEMP/gnustep-base"
+
+      # GCC_OPTS and LIBS of Makefile.linux, with the GNUstep Base built above. The make of UniversalDetector,
+      # which Makefile.linux of XADMaster starts, gets both variables too.
+      - name: Compile unar and lsar
+        run: |
+          gnustep="$RUNNER_TEMP/gnustep-base"
+          foundation="$(find "$gnustep" -path '*/Foundation/Foundation.h')"
+          library="$(find "$gnustep" -name libgnustep-base.so)"
+          if [ ! -f "$foundation" ] || [ ! -e "$library" ]; then
+            echo "::error::Cannot find Foundation/Foundation.h and libgnustep-base.so, once each, in $gnustep."
+            exit 1
+          fi
+          headers="${foundation%/Foundation/Foundation.h}"
+          libraries="${library%/*}"
+          echo "GNUSTEP_BASE_LIBRARIES=$libraries" >> "$GITHUB_ENV"
+          if ! make -f Makefile.linux -k -j"$(nproc)" --output-sync=target \
+              GCC_OPTS="-O2 -Wno-import -Wno-multichar -g -D_FILE_OFFSET_BITS=64 -isystem $headers" \
+              LIBS="-Wl,--no-whole-archive -L$libraries -lgnustep-base -lz -lbz2 -lwavpack -licuuc -lobjc -lm" \
+              unar lsar; then
+            echo "::error::make failed. See the errors above."
+            exit 1
+          fi
+          LD_LIBRARY_PATH="$libraries" ./unar -version
+          LD_LIBRARY_PATH="$libraries" ./lsar -version
+
+      # The libraries to pack, in libraries.tsv for the next step, and in an annotation as in `build-windows`.
+      - name: List the libraries that unar and lsar need
+        run: |
+          ls -l unar lsar
+          # `|| true`: the check below tells which library is not found.
+          output="$(LD_LIBRARY_PATH="$GNUSTEP_BASE_LIBRARIES" ldd unar lsar || true)"
+          echo "$output"
+          if grep -q 'not found' <<< "$output"; then
+            echo "::error::A library of unar or lsar is not found."
+            exit 1
+          fi
+          table=
+          total=0
+          count=0
+          : > "$RUNNER_TEMP/libraries.tsv"
+          # The lines of libraries look like `libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x...)`.
+          while read -r soname path; do
+            if [[ "$soname" =~ $SYSTEM_LIBRARIES ]]; then
+              continue
+            fi
+            if [[ "$path" == "$RUNNER_TEMP/gnustep-base/"* ]]; then
+              package='(built here)' version=1.31.1
+            else
+              # `dpkg -S` prints `package:architecture: file`. Only the package of the file that ldd found
+              # counts.
+              package=
+              while IFS= read -r line; do
+                if [ -n "$line" ] && [ "$(realpath "${line#*: }")" = "$(realpath "$path")" ]; then
+                  package="${line%%: *}"
+                  package="${package%%:*}"
+                fi
+              done <<< "$(dpkg -S "*/$soname" 2> /dev/null || true)"
+              if [ -z "$package" ]; then
+                echo "::error::$path ($soname) is in no package of Ubuntu."
+                exit 1
+              fi
+              version="$(dpkg-query -W -f='${Version}' "$package")"
+            fi
+            size="$(stat -L -c %s "$path")"
+            total=$(( total + size ))
+            count=$(( count + 1 ))
+            printf '%s\t%s\t%s\t%s\n' "$path" "$soname" "$package" "$version" >> "$RUNNER_TEMP/libraries.tsv"
+            table+="$(printf '%7d KB  %-28s %-14s %s' "$(( size / 1024 ))" "$soname" "$package" "$version")"$'\n'
+          done < <(awk '$2 == "=>" { print $1, $3 }' <<< "$output" | sort -u)
+          if [ "$count" = 0 ]; then
+            echo "::error::The output of ldd has no library to pack."
+            exit 1
+          fi
+          printf '%s' "$table"
+          mb="$(awk -v bytes="$total" 'BEGIN { printf "%.1f", bytes / 1048576 }')"
+          summary="unar and lsar need $count libraries that are not on every Linux system, $mb MB in all."
+          # In an annotation, % is written as %25, and a line end as %0A.
+          table="${table//'%'/%25}"
+          echo "::notice::${summary}%0A${table//$'\n'/%0A}"
+
+      # The same files as in the Windows package, in bin/ and lib/.
+      # - The LICENSE file of ICU: the copyright file of Ubuntu has only a part of the license of ICU.
+      # - No resource files of GNUstep Base, as on Windows: unar and lsar do not need these files. GNUstep Base
+      #   warns on stderr when it misses a file, and the checks below fail on anything on stderr.
+      # - libobjc has the GCC Runtime Library Exception, so the source code of libobjc is not needed.
+      #   The licenses of the other libraries of Ubuntu do not require their source code.
+      - name: Pack unar and lsar with their libraries and licenses
+        run: |
+          name="unar-$UNAR_VERSION-linux-x86_64"
+          dist="$PWD/dist/$name"
+          gnustep="$RUNNER_TEMP/gnustep-base-1.31.1"
+          # From the copyright file of each package (for ICU, from its LICENSE file).
+          declare -A licenses=(
+            [libobjc4]='GPL-3.0-or-later WITH GCC-exception-3.1'
+            [libffi8]='MIT'
+            [libicu74]='Unicode-3.0, and others in LICENSE'
+            [libbz2-1.0]='bzip2-1.0.6'
+            [zlib1g]='Zlib'
+            [libwavpack1]='BSD-3-Clause'
+          )
+          mkdir -p "$dist/bin" "$dist/lib" "$dist/licenses"
+          cp unar lsar "$dist/bin/"
+          cp LICENSE FORK_MODIFICATIONS.md "$dist/"
+          printf '%-28s %-14s %-28s %-40s %s\n' Library Package Version License "Source code in unar-$UNAR_VERSION-src.tar.xz" > "$dist/THIRD-PARTY.txt"
+          while IFS=$'\t' read -r path soname package version; do
+            cp -L "$path" "$dist/lib/$soname"
+            if [ "$package" = '(built here)' ]; then
+              if [[ "$soname" != libgnustep-base.so.* ]]; then
+                echo "::error::$soname is built here, but it is not the library of GNUstep Base, so its source code is missing."
+                exit 1
+              fi
+              package=gnustep-base license=LGPL-2.1-or-later source=gnustep-base-1.31.1/
+              mkdir -p "$dist/licenses/gnustep-base"
+              cp "$gnustep"/COPYING* "$dist/licenses/gnustep-base/"
+            else
+              license="${licenses[$package]:-}"
+              if [ -z "$license" ]; then
+                echo "::error::$soname is in the Ubuntu package $package, which is not in the table of licenses of this step."
+                exit 1
+              fi
+              source=-
+              mkdir -p "$dist/licenses/$package"
+              cp -L "/usr/share/doc/$package/copyright" "$dist/licenses/$package/"
+              if [ "$package" = libicu74 ] && [ ! -f "$dist/licenses/$package/LICENSE" ]; then
+                if [[ "$version" != 74.2-* ]]; then
+                  echo "::error::The LICENSE file below is the one of ICU 74.2, but the package libicu74 is $version."
+                  exit 1
+                fi
+                curl -fsSL -o "$dist/licenses/$package/LICENSE" \
+                  https://raw.githubusercontent.com/unicode-org/icu/release-74-2/LICENSE
+                echo "17510cf7a58b4879b887ec05a45d72cf1b73544dd9ec7e72f20110ed104229ee  $dist/licenses/$package/LICENSE" | sha256sum -c
+              fi
+            fi
+            printf '%-28s %-14s %-28s %-40s %s\n' "$soname" "$package" "$version" "$license" "$source" >> "$dist/THIRD-PARTY.txt"
+          done < "$RUNNER_TEMP/libraries.tsv"
+          cat "$dist/THIRD-PARTY.txt"
+          # As Debian does. The libraries of Ubuntu are already stripped.
+          ls -l "$dist"/bin/* "$dist"/lib/libgnustep-base.so.*
+          strip --strip-all "$dist/bin/unar" "$dist/bin/lsar"
+          strip --strip-unneeded "$dist"/lib/libgnustep-base.so.*
+          ls -l "$dist"/bin/* "$dist"/lib/libgnustep-base.so.*
+          patchelf --set-rpath '$ORIGIN/../lib' "$dist/bin/unar"
+          patchelf --set-rpath '$ORIGIN/../lib' "$dist/bin/lsar"
+          for library in "$dist"/lib/*; do
+            for needed in $(readelf -d "$library" | sed -n -E 's/.*\(NEEDED\).*\[(.+)\]$/\1/p'); do
+              if [ -f "$dist/lib/$needed" ]; then
+                patchelf --set-rpath '$ORIGIN' "$library"
+                break
+              fi
+            done
+          done
+          (cd "$dist" && zip -r -X -q "../$name.zip" .)
+          zipinfo "dist/$name.zip"
+          echo "::notice::$name.zip: $(( $(stat -c %s "dist/$name.zip") / 1024 )) KB."
+
+      # The checks below run the unzipped programs, as on a system without GNUstep.
+      - name: Unzip the package, and hide GNUstep
+        run: |
+          unzip -q "dist/unar-$UNAR_VERSION-linux-x86_64.zip" -d "$RUNNER_TEMP/unar-linux"
+          mv "$RUNNER_TEMP/gnustep-base" "$RUNNER_TEMP/gnustep-base-hidden"
+          for folder in /etc/GNUstep /usr/share/GNUstep /usr/lib/GNUstep; do
+            if [ -e "$folder" ]; then
+              sudo mv "$folder" "$folder-hidden"
+            fi
+          done
+          "$RUNNER_TEMP/unar-linux/bin/unar" -version
+          "$RUNNER_TEMP/unar-linux/bin/lsar" -version
+
+      # The libraries on the runner are not hidden, so this step checks that the programs load the libraries
+      # of the package. All the checks run, even if one fails.
+      - name: Check the libraries, and the versions of glibc and libstdc++ that the package needs
+        run: |
+          package="$RUNNER_TEMP/unar-linux"
+          files=("$package"/bin/* "$package"/lib/*)
+          failed=
+          for file in "${files[@]}"; do
+            relative="${file#"$package"/}"
+            machine="$(readelf -h "$file" | sed -n -E 's/^ *Machine: *//p')"
+            if [ "$machine" != 'Advanced Micro Devices X86-64' ]; then
+              echo "::error::$relative is not x86_64 code (machine: $machine)."
+              failed=1
+            fi
+            # readelf prints `Library runpath: [$ORIGIN/../lib]`.
+            dynamic="$(readelf -d "$file")"
+            if grep -q -F '(RPATH)' <<< "$dynamic"; then
+              echo "::error::$relative has an RPATH."
+              failed=1
+            fi
+            runpath="$(sed -n -E 's/.*\(RUNPATH\).*\[(.+)\]$/\1/p' <<< "$dynamic")"
+            expected='$ORIGIN'
+            if [[ "$relative" == bin/* ]]; then
+              expected='$ORIGIN/../lib'
+            elif [ -z "$runpath" ]; then
+              expected=
+            fi
+            if [ "$runpath" != "$expected" ]; then
+              echo "::error::The RUNPATH of $relative is '$runpath', not '$expected'."
+              failed=1
+            fi
+          done
+          for program in unar lsar; do
+            # readelf prints `[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]`.
+            interpreter="$(readelf -l "$package/bin/$program" | sed -n -E 's/.*Requesting program interpreter: (.+)\]$/\1/p')"
+            if [ "$interpreter" != /lib64/ld-linux-x86-64.so.2 ]; then
+              echo "::error::$program asks for the program loader '$interpreter', not /lib64/ld-linux-x86-64.so.2."
+              failed=1
+            fi
+            output="$(ldd "$package/bin/$program" || true)"
+            echo "$output"
+            if grep -q 'not found' <<< "$output"; then
+              echo "::error::A library of $program is not found."
+              failed=1
+            fi
+            if ! grep -q -F 'libgnustep-base.so' <<< "$output"; then
+              echo "::error::The output of ldd for $program has no library of GNUstep Base."
+              failed=1
+            fi
+            while read -r soname path; do
+              if [[ ! "$soname" =~ $SYSTEM_LIBRARIES ]] && [ "$(realpath "$path")" != "$(realpath "$package/lib/$soname")" ]; then
+                echo "::error::$program loads $soname from $path, not from lib/ of the package."
+                failed=1
+              fi
+            done < <(awk '$2 == "=>" { print $1, $3 }' <<< "$output")
+            errors="$("$package/bin/$program" -version 2>&1 > /dev/null)"
+            if [ -n "$errors" ]; then
+              echo "::error::$program prints on stderr: $errors"
+              failed=1
+            fi
+          done
+          # For example `GLIBC_2.34`. `sort -V` sorts 2.9 before 2.34.
+          for check in "GLIBC $MAX_GLIBC_VERSION" "GLIBCXX $MAX_GLIBCXX_VERSION"; do
+            read -r symbols max <<< "$check"
+            newest="$(objdump -T "${files[@]}" | grep -o -E "\b${symbols}_[0-9]+(\.[0-9]+)+" | sed "s/^${symbols}_//" | sort -u -V | tail -n 1 || true)"
+            echo "The newest $symbols that the package needs: $newest"
+            if [ -z "$newest" ]; then
+              echo "::error::No $symbols version found in the output of objdump."
+              failed=1
+            elif [ "$(printf '%s\n' "$newest" "$max" | sort -V | tail -n 1)" != "$max" ]; then
+              echo "::error::The package needs $symbols $newest, which is newer than $max."
+              failed=1
+            fi
+          done
+          if [ -n "$failed" ]; then
+            exit 1
+          fi
+
+      # The same check as in `build-macos`, and nothing on stderr.
+      - name: Check a gzip file
+        working-directory: ${{ runner.temp }}
+        run: |
+          bin="$RUNNER_TEMP/unar-linux/bin"
+          mkdir gzip-test
+          cd gzip-test
+          echo hello > hello.txt
+          gzip hello.txt
+          listing="$("$bin/lsar" hello.txt.gz 2> ../lsar-stderr.txt)"
+          echo "$listing"
+          if [ "$listing" != $'hello.txt.gz: Gzip\nhello.txt' ]; then
+            echo "::error::lsar does not list hello.txt in hello.txt.gz."
+            exit 1
+          fi
+          "$bin/unar" hello.txt.gz 2> ../unar-stderr.txt
+          if [ "$(cat hello.txt)" != hello ]; then
+            echo "::error::unar does not extract hello.txt from hello.txt.gz."
+            exit 1
+          fi
+          for program in lsar unar; do
+            if [ -s "../$program-stderr.txt" ]; then
+              echo "::error::$program prints on stderr: $(cat "../$program-stderr.txt")"
+              exit 1
+            fi
+          done
+
+      # The same 3 archives as in `build-windows`, and nothing on stderr. The MS-DOS time in an LZH header is
+      # a local time, so this check also tests that GNUstep Base finds the local time zone.
+      - name: Check が.txt in LZH archives, in Shift_JIS, EUC-JP and UTF-8
+        working-directory: ${{ runner.temp }}
+        run: |
+          bin="$RUNNER_TEMP/unar-linux/bin"
+          name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
+          mkdir lzh-test
+          cd lzh-test
+          failed=
+          #   encoding   header size, sum   file name: length, bytes (が is 82 AA in Shift_JIS, A4 AC in EUC-JP)
+          for test in 'Shift_JIS  \x1c\x55  \x06\x82\xaa\x2e\x74\x78\x74' \
+                      'EUC-JP     \x1c\x79  \x06\xa4\xac\x2e\x74\x78\x74' \
+                      'UTF-8      \x1d\x1a  \x07\xe3\x81\x8c\x2e\x74\x78\x74'; do
+            read -r encoding size_and_sum file_name <<< "$test"
+            archive="$size_and_sum"
+            archive+='\x2d\x6c\x68\x30\x2d'      # method `-lh0-`: stored, not compressed
+            archive+='\x06\x00\x00\x00'          # compressed size: 6
+            archive+='\x06\x00\x00\x00'          # original size: 6
+            archive+='\x00\x00\x21\x5c'          # MS-DOS time and date: 2026-01-01 00:00
+            archive+='\x20\x00'                  # attribute "archive", header level 0
+            archive+="$file_name"
+            archive+='\x34\x5a'                  # CRC-16 of the content
+            archive+='\x68\x65\x6c\x6c\x6f\x0a'  # content: "hello" and a line end
+            archive+='\x00'                      # end of the archive
+            printf '%b' "$archive" > "$encoding.lzh"
+            if ! "$bin/unar" -no-directory -output-directory "out-$encoding" -encoding "$encoding" "$encoding.lzh" 2> "stderr-$encoding.txt"; then
+              echo "::error::unar fails on $encoding.lzh: $(cat "stderr-$encoding.txt")"
+              failed=1
+              continue
+            fi
+            if [ -s "stderr-$encoding.txt" ]; then
+              echo "::error::unar prints on stderr for $encoding.lzh: $(cat "stderr-$encoding.txt")"
+              failed=1
+            fi
+            written="$(ls "out-$encoding" || true)"
+            echo "$encoding: $written"
+            # Linux keeps the name as written, so が must be one character.
+            if [ "$written" != "$name" ] || [ "$(cat "out-$encoding/$name")" != hello ]; then
+              echo "::error::unar does not extract $encoding.lzh as が.txt with its content. The bytes of the name: $(printf '%s' "$written" | od -An -tx1)"
+              failed=1
+            fi
+          done
+          if [ -n "$failed" ]; then
+            exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: unar-linux-x86_64
+          path: XADMaster/dist/unar-*-linux-x86_64.zip
+          if-no-files-found: error
+
   # Only for a release tag: create the release page of the tag, with the packages and the source code
-  # that `build-macos` and `build-windows` made.
+  # that `build-macos`, `build-windows` and `build-linux` made.
   # This job never replaces a published file: if the release page already exists, this job fails
   # instead.
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [ build-macos, build-windows ]
+    needs: [ build-macos, build-windows, build-linux ]
     runs-on: ubuntu-latest
     permissions:
       # Needed to create the release page and to upload files to it.
       contents: write
     steps:
-      # The 3 artifacts: `unar-macos-universal`, `unar-win64` and `unar-src`.
+      # The 4 artifacts: `unar-macos-universal`, `unar-win64`, `unar-linux-x86_64` and `unar-src`.
       # Their files go into the same folder.
       - name: Download the packages and the source code
         uses: actions/download-artifact@v8
@@ -611,5 +1008,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/unar-*-macos-universal.zip \
             dist/unar-*-win64.zip \
+            dist/unar-*-linux-x86_64.zip \
             dist/unar-*-src.tar.xz \
             --verify-tag --title "$GITHUB_REF_NAME"

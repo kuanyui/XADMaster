@@ -2,8 +2,8 @@
 
 This repository, https://github.com/kuanyui/XADMaster, is a fork of XADMaster
 (https://github.com/MacPaw/XADMaster), the library of The Unarchiver and of its command-line
-tools `unar` and `lsar`. It builds `unar` and `lsar` for macOS (Apple silicon and Intel), and
-tries to build them for Windows.
+tools `unar` and `lsar`. It builds `unar` and `lsar` for macOS (Apple silicon and Intel) and for
+Linux (x86_64), and tries to build them for Windows.
 
 Its changes to XADMaster:
 
@@ -22,7 +22,7 @@ Its changes to XADMaster:
   of a release.
 - `.github/workflows/build.yaml`: builds `unar` and `lsar`, with UniversalDetector
   (https://github.com/MacPaw/universal-detector) at its last commit. For a tag whose name is the
-  version without its `v` (for example `1.10.7-ky20261031`), the workflow also puts both packages
+  version without its `v` (for example `1.10.7-ky20261031`), the workflow also puts all the packages
   and their source code on the release page of the tag.
   - macOS: universal binaries for Apple silicon (arm64) and Intel (x86_64), for macOS 12 or later.
     Before the build, the workflow links `lsar` to libc++ instead of libstdc++, which the macOS SDK
@@ -37,10 +37,26 @@ Its changes to XADMaster:
     LICENSE, this file, `licenses/` (the license files of the DLLs), and THIRD-PARTY.txt (the
     package, version and license of each DLL, and for an LGPL or GPL one, where its source code is
     in `unar-VERSION-src.tar.xz`).
-  - The source code of both release packages is in `unar-VERSION-src.tar.xz`, a separate file of
+  - Linux (x86_64): built on Ubuntu 24.04 with gcc and the Objective-C runtime of GCC (libobjc), as
+    Debian and Ubuntu build unar, and with the same GNUstep Base as on Windows (also without
+    Zeroconf and libdispatch). This GNUstep Base reads its configuration file only from the folder
+    of its library, as on Windows, so a GNUstep installed on the system does not change it. The
+    package has no such file, so GNUstep Base uses its defaults.
+    The programs run on Linux (x86_64) with glibc 2.39 or later, for example Ubuntu 24.04 or later.
+    They use the glibc and the C++ library of GCC (libstdc++) of the system. On Linux, they convert
+    the encodings of file names with ICU (`XADStringICU.m`), as in `Makefile.linux`.
+    The package `unar-VERSION-linux-x86_64.zip` has `bin/unar`, `bin/lsar`, `lib/` (the libraries
+    that they need: GNUstep Base, and libraries of Ubuntu), LICENSE, this file, `licenses/` (the
+    copyright files of the Ubuntu packages of the libraries, the LICENSE file of ICU, and the license
+    files of GNUstep Base), and THIRD-PARTY.txt (as in the Windows package). The programs find the
+    libraries in `lib/` through their RUNPATH (`$ORIGIN/../lib`).
+    libobjc is under the GPL with the GCC Runtime Library Exception, which allows distributing it
+    with programs that GCC compiled, under the terms of these programs. The licenses of the other
+    libraries of Ubuntu do not require their source code.
+  - The source code of all the release packages is in `unar-VERSION-src.tar.xz`, a separate file of
     the same release (https://github.com/kuanyui/XADMaster/releases): XADMaster and
     UniversalDetector at the commits built (with this workflow, which shows how they and GNUstep
-    Base are built), GNUstep Base as built, and the MSYS2 source package of each DLL under the LGPL
-    or the GPL. The LGPL allows the source code to be a separate download from the same place as
-    the programs (sections 4 and 6d).
+    Base are built), GNUstep Base as built (the same for Windows and Linux), and the MSYS2 source
+    package of each DLL under the LGPL or the GPL. The LGPL allows the source code to be a separate
+    download from the same place as the programs (sections 4 and 6d).
 - This file.

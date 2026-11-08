@@ -38,13 +38,15 @@ Its changes to XADMaster:
     package, version and license of each DLL, and for an LGPL or GPL one, where its source code is
     in `unar-VERSION-src.tar.xz`).
   - Linux (x86_64): built on Ubuntu 24.04 with gcc and the Objective-C runtime of GCC (libobjc), as
-    Debian and Ubuntu build unar, and with the same GNUstep Base as on Windows (also without
-    Zeroconf and libdispatch). This GNUstep Base reads its configuration file only from the folder
+    Debian and Ubuntu build unar, and with GNUstep Base from the same source code as on Windows, but
+    with ICU (and also without Zeroconf and libdispatch). This GNUstep Base reads its configuration file only from the folder
     of its library, as on Windows, so a GNUstep installed on the system does not change it. The
     package has no such file, so GNUstep Base uses its defaults.
     The programs run on Linux (x86_64) with glibc 2.39 or later, for example Ubuntu 24.04 or later.
     They use the glibc and the C++ library of GCC (libstdc++) of the system. On Linux, they convert
-    the encodings of file names with ICU (`XADStringICU.m`), as in `Makefile.linux`.
+    the encodings of file names with ICU (`XADStringICU.m`), as in `Makefile.linux`. They write file
+    names in the encoding of the locale, for example UTF-8 with `LANG=en_US.UTF-8`: GNUstep Base takes
+    this encoding from ICU. Without ICU, GNUstep Base would write file names in Latin-1.
     The package `unar-VERSION-linux-x86_64.zip` has `bin/unar`, `bin/lsar`, `lib/` (the libraries
     that they need: GNUstep Base, and libraries of Ubuntu), LICENSE, this file, `licenses/` (the
     copyright files of the Ubuntu packages of the libraries, the LICENSE file of ICU, and the license
@@ -56,7 +58,7 @@ Its changes to XADMaster:
   - The source code of all the release packages is in `unar-VERSION-src.tar.xz`, a separate file of
     the same release (https://github.com/kuanyui/XADMaster/releases): XADMaster and
     UniversalDetector at the commits built (with this workflow, which shows how they and GNUstep
-    Base are built), GNUstep Base as built (the same for Windows and Linux), and the MSYS2 source
+    Base are built), GNUstep Base with its 2 changes (the same for Windows and Linux), and the MSYS2 source
     package of each DLL under the LGPL or the GPL. The LGPL allows the source code to be a separate
     download from the same place as the programs (sections 4 and 6d).
 - This file.

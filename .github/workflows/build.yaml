@@ -615,11 +615,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gobjc g++ gnustep-make libffi-dev libicu-dev zlib1g-dev libbz2-dev libwavpack-dev \
+            gobjc g++ gnustep-make pkgconf libffi-dev libicu-dev zlib1g-dev libbz2-dev libwavpack-dev \
             patchelf zip unzip
           gcc --version
 
       # The same source code as in `build-windows`, so its unar-VERSION-src.tar.xz covers this package too.
+      # - With ICU, unlike on Windows: without ICU, GNUstep Base converts file names to Latin-1, and unar
+      #   cannot write a name like が.txt. With ICU, GNUstep Base follows the locale. configure finds ICU with
+      #   pkgconf.
       # - `ac_cv_header_*=no`: configure has no option to disable libcurl and GMP, which the runner may have.
       # - `--with-config-file=./GNUstep.conf` and `--disable-environment-config-file`: a GNUstep installed on
       #   the user's system cannot change this GNUstep Base, as on Windows. `./` is the folder of the library.
@@ -643,7 +646,7 @@ jobs:
             echo "::error::$header still has BLOCK_SCOPE on the instance variable _block."
             exit 1
           fi
-          ./configure --disable-icu --disable-tls --disable-xml --disable-xslt --disable-nsurlsession \
+          ./configure --disable-tls --disable-xml --disable-xslt --disable-nsurlsession \
             --disable-zeroconf --disable-libdispatch \
             --with-config-file=./GNUstep.conf --disable-environment-config-file \
             ac_cv_header_curl_curl_h=no ac_cv_header_gmp_h=no
@@ -924,8 +927,11 @@ jobs:
 
       # The same 3 archives as in `build-windows`, and nothing on stderr. The MS-DOS time in an LZH header is
       # a local time, so this check also tests that GNUstep Base finds the local time zone.
+      # LC_ALL: GNUstep Base writes file names in the encoding of the locale.
       - name: Check が.txt in LZH archives, in Shift_JIS, EUC-JP and UTF-8
         working-directory: ${{ runner.temp }}
+        env:
+          LC_ALL: C.UTF-8
         run: |
           bin="$RUNNER_TEMP/unar-linux/bin"
           name=$'\xe3\x81\x8c.txt'  # が.txt, with が as one character (U+304C)
